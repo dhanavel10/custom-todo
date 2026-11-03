@@ -1,0 +1,460 @@
+/* Minimalist Eisenhower Matrix Styles */
+.matrix-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  height: 100%;
+  width: 100%;
+}
+
+.matrix-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.matrix-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.matrix-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--heading);
+}
+
+.matrix-subtitle {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.matrix-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.ai-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--success);
+}
+
+.ai-status-dot.offline {
+  background-color: var(--warning);
+}
+
+/* 2x2 Responsive Matrix Grid */
+.matrix-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 900px) {
+  .matrix-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    overflow-y: auto;
+  }
+}
+
+.matrix-quadrant {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition);
+}
+
+.matrix-quadrant:hover {
+  border-color: var(--border-focus);
+}
+
+/* Quadrant Accent Borders */
+.quadrant-do-first {
+  border-top: 3px solid #EF4444;
+}
+
+.quadrant-schedule {
+  border-top: 3px solid var(--primary);
+}
+
+.quadrant-delegate {
+  border-top: 3px solid var(--accent);
+}
+
+.quadrant-eliminate {
+  border-top: 3px solid var(--text-muted);
+}
+
+.quadrant-header {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background-color: var(--primary-light);
+  cursor: pointer;
+  user-select: none;
+  transition: var(--transition);
+}
+
+.quadrant-header:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.quadrant-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.quadrant-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.quadrant-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quadrant-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--heading);
+}
+
+.quadrant-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background-color: var(--surface);
+  color: var(--primary);
+  border: 1px solid var(--border);
+}
+
+.quadrant-tagline {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.quadrant-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.matrix-card {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: var(--transition);
+  position: relative;
+}
+
+.matrix-card:hover {
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-sm);
+}
+
+.matrix-card.completed {
+  opacity: 0.55;
+  background-color: var(--bg-secondary);
+}
+
+.matrix-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.matrix-card-title {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--heading);
+  line-height: 1.35;
+  flex: 1;
+}
+
+.matrix-card-title.completed {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+.matrix-card-desc {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.matrix-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.meta-pill.deadline {
+  color: var(--text-primary);
+  border-color: var(--border-focus);
+}
+
+.meta-pill.overdue {
+  color: var(--danger);
+  border-color: var(--danger);
+  background-color: var(--danger-bg);
+}
+
+.meta-pill.category {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-size: 0.65rem;
+}
+
+.meta-pill.ai-insight {
+  cursor: help;
+  color: var(--text-primary);
+  background-color: var(--bg-secondary);
+}
+
+.matrix-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  gap: 8px;
+}
+
+.quadrant-select {
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background-color: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.quadrant-select:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.matrix-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.quadrant-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 120px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  gap: 6px;
+}
+
+/* Quick Add in Quadrant */
+.quadrant-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  transition: var(--transition);
+  margin-top: auto;
+}
+
+.quadrant-add-btn:hover {
+  border-color: var(--border-focus);
+  color: var(--text-primary);
+  background-color: var(--bg-secondary);
+}
+
+/* Focused Quadrant Popup Modal Styles */
+.matrix-modal-window {
+  max-width: 680px;
+  width: 92%;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  padding: 22px;
+  border-radius: var(--radius-lg);
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+}
+
+.matrix-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.matrix-modal-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.matrix-modal-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.matrix-modal-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--heading);
+}
+
+.matrix-modal-subtitle {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.matrix-modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.matrix-modal-tabs {
+  display: flex;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.matrix-tab-btn {
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: var(--transition);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.matrix-tab-btn:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.matrix-tab-btn.active {
+  background-color: var(--primary);
+  color: #FFFFFF;
+  border-color: var(--primary);
+  font-weight: 500;
+}
+
+.matrix-tab-count {
+  font-size: 0.68rem;
+  padding: 1px 5px;
+  border-radius: 9999px;
+  background: rgba(125, 125, 125, 0.2);
+}
+
+.matrix-modal-search-row {
+  margin-top: 12px;
+}
+
+.matrix-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 2px;
+  min-height: 220px;
+  max-height: 480px;
+}
+
+.matrix-modal-footer {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+}
