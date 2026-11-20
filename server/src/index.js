@@ -5,15 +5,6 @@ import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import authRoutes from './routes/auth.js';
-import userRoutes from './routes/user.js';
-import capturesRoutes from './routes/captures.js';
-import tasksRoutes from './routes/tasks.js';
-import notesRoutes from './routes/notes.js';
-import remindersRoutes from './routes/reminders.js';
-import notificationsRoutes from './routes/notifications.js';
-import { startReminderScheduler } from './remindersScheduler.js';
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -22,10 +13,25 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 dotenv.config();
 
+import { initDb } from './db.js';
+import authRoutes from './routes/auth.js';
+import userRoutes from './routes/user.js';
+import capturesRoutes from './routes/captures.js';
+import tasksRoutes from './routes/tasks.js';
+import notesRoutes from './routes/notes.js';
+import remindersRoutes from './routes/reminders.js';
+import notificationsRoutes from './routes/notifications.js';
+import plansRoutes from './routes/plans.js';
+import { startReminderScheduler } from './remindersScheduler.js';
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} (Host: ${req.headers.host || ''})`);
+  next();
+});
 app.use(cors({
   origin: true,
   credentials: true
@@ -46,6 +52,7 @@ app.use('/api/v1/tasks', tasksRoutes);
 app.use('/api/v1/notes', notesRoutes);
 app.use('/api/v1/reminders', remindersRoutes);
 app.use('/api/v1/notifications', notificationsRoutes);
+app.use('/api/v1/plans', plansRoutes);
 
 // Serve frontend client in production
 const clientDistPath = path.resolve(__dirname, '../../client/dist');
@@ -60,7 +67,7 @@ app.get('*', (req, res, next) => {
   });
 });
 
-// Global Error Handler conforming to Section 6.4
+// Global Error Handler
 app.use((err, req, res, next) => {
   console.error('Unhandled Server Error:', err);
   const status = err.status || 500;
@@ -73,12 +80,15 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start Background Reminder Poller (every 10 seconds for responsive in-app alerts)
+// Initialize Database (PostgreSQL if available, fallback to SQLite)
+await initDb();
+
+// Start Background Reminder Poller
 startReminderScheduler(10000);
 
 // Start HTTP Server
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Productivity Backend & App running on port ${PORT}`);
+const HOST = process.env.HOST || '0.0.0.0';
+app.listen(PORT, HOST, () => {
+  console.log(`Productivity Backend & App running on http://${HOST}:${PORT}`);
   console.log(`Open in browser: http://localhost:${PORT}`);
 });
-

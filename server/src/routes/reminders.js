@@ -7,9 +7,9 @@ const router = express.Router();
 router.use(authenticate);
 
 // GET /api/v1/reminders
-router.get('/', (req, res, next) => {
+router.get('/', async (req, res, next) => {
   try {
-    const reminders = db.prepare(`
+    const reminders = await db.prepare(`
       SELECT r.*, t.title as task_title
       FROM reminders r
       JOIN tasks t ON r.task_id = t.id
@@ -34,15 +34,15 @@ router.get('/', (req, res, next) => {
 });
 
 // PATCH /api/v1/reminders/:id
-router.patch('/:id', (req, res, next) => {
+router.patch('/:id', async (req, res, next) => {
   try {
-    const existing = db.prepare('SELECT * FROM reminders WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const existing = await db.prepare('SELECT * FROM reminders WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!existing) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Reminder not found' } });
     }
 
     const { remindAt, channel, status } = req.body;
-    db.prepare(`
+    await db.prepare(`
       UPDATE reminders
       SET remind_at = COALESCE(?, remind_at),
           channel = COALESCE(?, channel),
@@ -50,7 +50,7 @@ router.patch('/:id', (req, res, next) => {
       WHERE id = ? AND user_id = ?
     `).run(remindAt || null, channel || null, status || null, req.params.id, req.user.id);
 
-    const updated = db.prepare('SELECT * FROM reminders WHERE id = ?').get(req.params.id);
+    const updated = await db.prepare('SELECT * FROM reminders WHERE id = ?').get(req.params.id);
     res.json({
       id: updated.id,
       userId: updated.user_id,
@@ -67,9 +67,9 @@ router.patch('/:id', (req, res, next) => {
 });
 
 // DELETE /api/v1/reminders/:id (Cancel reminder)
-router.delete('/:id', (req, res, next) => {
+router.delete('/:id', async (req, res, next) => {
   try {
-    const result = db.prepare('DELETE FROM reminders WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+    const result = await db.prepare('DELETE FROM reminders WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
     if (result.changes === 0) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Reminder not found' } });
     }
@@ -80,9 +80,13 @@ router.delete('/:id', (req, res, next) => {
 });
 
 // POST /api/v1/reminders/trigger-check - on-demand poll trigger
-router.post('/trigger-check', (req, res) => {
-  processPendingReminders();
-  res.json({ message: 'Reminder check triggered successfully' });
+router.post('/trigger-check', async (req, res, next) => {
+  try {
+    await processPendingReminders();
+    res.json({ message: 'Reminder check triggered successfully' });
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;

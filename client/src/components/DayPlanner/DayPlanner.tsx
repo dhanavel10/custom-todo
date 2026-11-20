@@ -1,14 +1,10 @@
-import React, { useState, useMemo } from 'react';
-import {
-  ChevronLeft,
-  ChevronRight,
-  Plus,
-  Clock,
-  CheckCircle2,
-  CalendarDays
-} from 'lucide-react';
-import { formatDate } from '../../lib/date';
-import type { Task, EisenhowerQuadrant } from '../../types';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, Plus, CalendarDays, Inbox, Trash2, Ellipsis, Pencil, CalendarClock, GripVertical, Sun, Rows3, Columns3, ArrowRight, CalendarCheck } from 'lucide-react';
+import type { Task } from '../../types';
+import { addDays, formatTime, isSameDay, startOfDay, startOfWeek, toDateKey } from '../../lib/date';
+import { quadrantOf } from '../../lib/quadrants';
+import { Button, EmptyState, IconButton, Menu, MenuItem, MenuSep, ProgressRing, QuadrantTag, RescheduleMenu, Segmented, TaskCheck } from '../ui';
+import './DayPlanner.css';
 
 interface DayPlannerProps {
   tasks: Task[];
@@ -19,619 +15,537 @@ interface DayPlannerProps {
   onQuickCreateTask: (title: string, dateIso: string) => Promise<void>;
 }
 
-type PlannerViewMode = 'single' | 'week';
+type PlannerViewMode = 'day' | 'week';
 
-export const DayPlanner: React.FC<DayPlannerProps> = ({
-  tasks,
-  onToggleComplete,
-  onEditTask,
-  onDeleteTask,
-  onUpdateTaskDate,
-  onQuickCreateTask
-}) => {
-  // Selected reference date (defaults to today)
-  const [selectedDate, setSelectedDate] = useState<Date>(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d;
-  });
+const DRAG_MIME = 'application/x-task-id';
+const HOUR_H = 56; // px per hour
+const BLOCK_MIN = 45; // visual block length in minutes (tasks have a due time, not a duration)
+const SNAP = 15;
+const DEFAULT_HOUR = 18; // same default the planner has always used for date-only scheduling
 
-  const [viewMode, setViewMode] = useState<PlannerViewMode>('single');
-  const [inlineTitle, setInlineTitle] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showUnscheduled, setShowUnscheduled] = useState(false);
+const minutesOf = (d: Date) => d.getHours() * 60 + d.getMinutes();
+const hourLabel = (h: number) => new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: 'numeric' });
+const dayKeyOf = (t: Task) => (t.dueAt ? toDateKey(new Date(t.dueAt)) : null);
 
-  // Helper to format date keys: YYYY-MM-DD in local time
-  const toDateKey = (d: Date): string => {
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+/** Assign side-by-side lanes to blocks that overlap in time. */
+function layoutBlocks(tasks: Task[]) {
+  const items = tasks
+    .map((t) => {
+      const start = minutesOf(new Date(t.dueAt!));
+      return { t, start, end: start + BLOCK_MIN, lane: 0, lanes: 1 };
+    })
+    .sort((a, b) => a.start - b.start);
+
+  let cluster: typeof items = [];
+  let clusterEnd = -1;
+  let laneEnds: number[] = [];
+  const flush = () => {
+    for (const it of cluster) it.lanes = laneEnds.length;
+    cluster = [];
+    laneEnds = [];
   };
+  for (const it of items) {
+    if (it.start >= clusterEnd) {
+      flush();
+      clusterEnd = -1;
+    }
+    let lane = laneEnds.findIndex((end) => end <= it.start);
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(it.end);
+    } else laneEnds[lane] = it.end;
+    it.lane = lane;
+    cluster.push(it);
+    clusterEnd = Math.max(clusterEnd, it.end);
+  }
+  flush();
+  return items;
+}
 
-  const todayKey = useMemo(() => toDateKey(new Date()), []);
-  const selectedKey = useMemo(() => toDateKey(selectedDate), [selectedDate]);
+export const DayPlanner: React.FC<DayPlannerProps> = ({ tasks, onToggleComplete, onEditTask, onDeleteTask, onUpdateTaskDate, onQuickCreateTask }) => {
+  const [selectedDate, setSelectedDate] = useState<Date>(() => startOfDay(new Date()));
+  const [viewMode, setViewMode] = useState<PlannerViewMode>('day');
+  const [title, setTitle] = useState('');
+  const [time, setTime] = useState('09:00');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropMin, setDropMin] = useState<number | null>(null);
+  const [dropDay, setDropDay] = useState<string | null>(null);
+  const [now, setNow] = useState(() => new Date());
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const addInputRef = useRef<HTMLInputElement>(null);
 
-  // Group tasks by their local due date key YYYY-MM-DD
-  const { tasksByDay, unscheduledTasks } = useMemo(() => {
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const selectedKey = toDateKey(selectedDate);
+  const isToday = isSameDay(selectedDate, now);
+
+  const { byDay, backlog } = useMemo(() => {
     const map = new Map<string, Task[]>();
     const unscheduled: Task[] = [];
-
-    for (const task of tasks) {
-      if (task.status === 'ARCHIVED') continue;
-      if (!task.dueAt) {
-        unscheduled.push(task);
+    for (const t of tasks) {
+      if (t.status === 'ARCHIVED') continue;
+      const key = dayKeyOf(t);
+      if (!key || isNaN(new Date(t.dueAt!).getTime())) {
+        if (t.status !== 'COMPLETED') unscheduled.push(t);
         continue;
       }
-
-      const d = new Date(task.dueAt);
-      if (isNaN(d.getTime())) {
-        unscheduled.push(task);
-        continue;
-      }
-
-      const key = toDateKey(d);
-      if (!map.has(key)) {
-        map.set(key, []);
-      }
-      map.get(key)!.push(task);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(t);
     }
-
-    return { tasksByDay: map, unscheduledTasks: unscheduled };
+    for (const list of map.values()) list.sort((a, b) => Date.parse(a.dueAt!) - Date.parse(b.dueAt!));
+    return { byDay: map, backlog: unscheduled };
   }, [tasks]);
 
-  // Generate 7-day ribbon array centered/starting around the selected week
-  const ribbonDays = useMemo(() => {
-    const days: { date: Date; key: string; label: string; dayName: string; count: number }[] = [];
-    const base = new Date(selectedDate);
-    // Show 7 days: selectedDate - 2 days to selectedDate + 4 days, or from selectedDate
-    base.setDate(base.getDate() - 1);
+  const weekStart = startOfWeek(selectedDate);
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
-    for (let i = 0; i < 7; i++) {
-      const cur = new Date(base);
-      cur.setDate(base.getDate() + i);
-      const key = toDateKey(cur);
-      const isToday = key === todayKey;
+  const dayTasks = useMemo(() => byDay.get(selectedKey) ?? [], [byDay, selectedKey]);
+  const doneCount = dayTasks.filter((t) => t.status === 'COMPLETED').length;
+  const pct = dayTasks.length ? Math.round((doneCount / dayTasks.length) * 100) : 0;
+  const blocks = useMemo(() => layoutBlocks(dayTasks), [dayTasks]);
 
-      const dayName = isToday
-        ? 'Today'
-        : cur.toLocaleDateString([], { weekday: 'short' });
-      const label = cur.toLocaleDateString([], { month: 'short', day: 'numeric' });
-      const dayTasks = tasksByDay.get(key) || [];
-      const pendingCount = dayTasks.filter((t) => t.status !== 'COMPLETED').length;
+  // Scroll the timeline to something useful when the day changes
+  useLayoutEffect(() => {
+    if (viewMode !== 'day' || !scrollRef.current) return;
+    const first = dayTasks[0] ? minutesOf(new Date(dayTasks[0].dueAt!)) / 60 : 8;
+    const focusHour = isToday ? Math.min(now.getHours(), first) : first;
+    scrollRef.current.scrollTo({ top: Math.max(0, (focusHour - 1) * HOUR_H), behavior: 'smooth' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey, viewMode]);
 
-      days.push({
-        date: cur,
-        key,
-        label,
-        dayName,
-        count: pendingCount
-      });
-    }
-    return days;
-  }, [selectedDate, todayKey, tasksByDay]);
+  const go = (delta: number) => setSelectedDate((d) => addDays(d, delta * (viewMode === 'week' ? 7 : 1)));
 
-  // Navigate dates
-  const handlePrevDay = () => {
-    const prev = new Date(selectedDate);
-    prev.setDate(prev.getDate() - (viewMode === 'week' ? 7 : 1));
-    setSelectedDate(prev);
+  const scheduleAt = (taskId: string, day: Date, minutes: number) => {
+    const d = new Date(day);
+    d.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+    void onUpdateTaskDate(taskId, d.toISOString());
   };
 
-  const handleNextDay = () => {
-    const next = new Date(selectedDate);
-    next.setDate(next.getDate() + (viewMode === 'week' ? 7 : 1));
-    setSelectedDate(next);
+  /** Move to another day, keeping the task's time of day. */
+  const moveToDay = (taskId: string, day: Date) => {
+    const task = tasks.find((t) => t.id === taskId);
+    const mins = task?.dueAt ? minutesOf(new Date(task.dueAt)) : DEFAULT_HOUR * 60;
+    scheduleAt(taskId, day, mins);
   };
 
-  const handleJumpToday = () => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    setSelectedDate(d);
+  const minutesFromPointer = (e: React.DragEvent | React.MouseEvent) => {
+    const el = scrollRef.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    const y = e.clientY - rect.top + el.scrollTop - 8; // 8px top padding of the grid
+    const raw = (y / HOUR_H) * 60;
+    return Math.max(0, Math.min(24 * 60 - SNAP, Math.round(raw / SNAP) * SNAP));
   };
 
-  // Quick Inline Add for selected date
-  const handleInlineSubmit = async (e: React.FormEvent, targetDateKey?: string) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inlineTitle.trim() || isSubmitting) return;
-
+    if (!title.trim() || isSubmitting) return;
+    const [h, m] = time.split(':').map(Number);
+    const d = new Date(selectedDate);
+    d.setHours(h ?? DEFAULT_HOUR, m ?? 0, 0, 0);
     setIsSubmitting(true);
     try {
-      const key = targetDateKey || selectedKey;
-      const [y, m, d] = key.split('-').map(Number);
-      const dateObj = new Date(y, m - 1, d, 18, 0, 0); // 6:00 PM default on that date
-      await onQuickCreateTask(inlineTitle.trim(), dateObj.toISOString());
-      setInlineTitle('');
+      await onQuickCreateTask(title.trim(), d.toISOString());
+      setTitle('');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Reschedule actions
-  const handleMoveToDay = async (taskId: string, targetDaysOffset: number) => {
-    const target = new Date();
-    target.setDate(target.getDate() + targetDaysOffset);
-    target.setHours(18, 0, 0, 0);
-    await onUpdateTaskDate(taskId, target.toISOString());
-  };
-
-  const handleSetCustomDate = async (taskId: string, dateString: string) => {
-    if (!dateString) return;
-    const [y, m, d] = dateString.split('-').map(Number);
-    const target = new Date(y, m - 1, d, 18, 0, 0);
-    await onUpdateTaskDate(taskId, target.toISOString());
-  };
-
-  // Tasks for single day view
-  const currentDayTasks = tasksByDay.get(selectedKey) || [];
-  const completedCount = currentDayTasks.filter((t) => t.status === 'COMPLETED').length;
-  const totalCount = currentDayTasks.length;
-  const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
-
-  // Split day's tasks into categories
-  const urgentTasks = currentDayTasks.filter(
-    (t) => t.status !== 'COMPLETED' && (t.eisenhowerQuadrant === 'DO_FIRST' || t.priority === 'URGENT')
-  );
-  const scheduledTasks = currentDayTasks.filter(
-    (t) =>
-      t.status !== 'COMPLETED' &&
-      t.eisenhowerQuadrant !== 'DO_FIRST' &&
-      t.priority !== 'URGENT'
-  );
-  const completedTasks = currentDayTasks.filter((t) => t.status === 'COMPLETED');
-
-  const getQuadrantBadge = (q?: EisenhowerQuadrant) => {
-    switch (q) {
-      case 'DO_FIRST':
-        return <span className="badge badge-urgent">Q1: Do First</span>;
-      case 'SCHEDULE':
-        return <span className="badge badge-high">Q2: Schedule</span>;
-      case 'DELEGATE':
-        return <span className="badge badge-medium">Q3: Delegate</span>;
-      case 'ELIMINATE':
-        return <span className="badge">Q4: Eliminate</span>;
-      default:
-        return null;
+  const dragProps = (t: Task) => ({
+    draggable: t.status !== 'COMPLETED',
+    onDragStart: (e: React.DragEvent) => {
+      e.dataTransfer.setData(DRAG_MIME, t.id);
+      e.dataTransfer.effectAllowed = 'move';
+      setDragId(t.id);
+    },
+    onDragEnd: () => {
+      setDragId(null);
+      setDropMin(null);
+      setDropDay(null);
     }
+  });
+
+  const dayDropProps = (day: Date) => {
+    const key = toDateKey(day);
+    return {
+      onDragOver: (e: React.DragEvent) => {
+        if (!e.dataTransfer.types.includes(DRAG_MIME)) return;
+        e.preventDefault();
+        if (dropDay !== key) setDropDay(key);
+      },
+      onDragLeave: (e: React.DragEvent) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropDay((k) => (k === key ? null : k));
+      },
+      onDrop: (e: React.DragEvent) => {
+        e.preventDefault();
+        const id = e.dataTransfer.getData(DRAG_MIME);
+        setDropDay(null);
+        setDragId(null);
+        if (id) moveToDay(id, day);
+      }
+    };
   };
 
-  return (
-    <div className="day-planner-container">
-      {/* Top Header Bar */}
-      <div className="day-planner-header">
-        <div className="day-planner-nav-row">
-          <div className="day-nav-controls">
-            <button className="btn btn-ghost btn-sm" onClick={handlePrevDay} title="Previous">
-              <ChevronLeft size={16} />
-            </button>
-            <button className="btn btn-ghost btn-sm" onClick={handleJumpToday}>
-              Today
-            </button>
-            <button className="btn btn-ghost btn-sm" onClick={handleNextDay} title="Next">
-              <ChevronRight size={16} />
-            </button>
+  const taskMenu = (t: Task) => (
+    <Menu width={210} trigger={(p) => <IconButton {...p} icon={Ellipsis} label="More" size="sm" />}>
+      {(close) => (
+        <>
+          <MenuItem
+            icon={Pencil}
+            onSelect={() => {
+              close();
+              onEditTask(t);
+            }}
+          >
+            Edit details
+          </MenuItem>
+          <MenuItem
+            icon={Inbox}
+            onSelect={() => {
+              close();
+              void onUpdateTaskDate(t.id, null);
+            }}
+          >
+            Move to backlog
+          </MenuItem>
+          <MenuSep />
+          <MenuItem
+            icon={Trash2}
+            danger
+            onSelect={() => {
+              close();
+              onDeleteTask(t.id);
+            }}
+          >
+            Delete
+          </MenuItem>
+        </>
+      )}
+    </Menu>
+  );
 
-            <span className="current-date-title">
-              {selectedDate.toLocaleDateString([], {
-                weekday: 'long',
-                month: 'short',
-                day: 'numeric',
-                year: 'numeric'
-              })}
-              {selectedKey === todayKey && <span className="today-chip">Today</span>}
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {/* View Switcher */}
-            <div className="view-mode-toggle">
-              <button
-                className={`view-toggle-btn ${viewMode === 'single' ? 'active' : ''}`}
-                onClick={() => setViewMode('single')}
-              >
-                Day Breakdown
-              </button>
-              <button
-                className={`view-toggle-btn ${viewMode === 'week' ? 'active' : ''}`}
-                onClick={() => setViewMode('week')}
-              >
-                7-Day Split
-              </button>
-            </div>
-
-            {/* Jump to Date Input */}
+  /* ---------- Header ---------- */
+  const header = (
+    <div className="planner-head">
+      <div className="planner-date">
+        <span className="planner-dow">
+          {viewMode === 'week'
+            ? `${weekDays[0].toLocaleDateString([], { month: 'long' })}${weekDays[6].getMonth() !== weekDays[0].getMonth() ? ` – ${weekDays[6].toLocaleDateString([], { month: 'long' })}` : ''}`
+            : selectedDate.toLocaleDateString([], { weekday: 'long' })}
+        </span>
+        <span className="planner-full">
+          {viewMode === 'week'
+            ? `Week of ${weekDays[0].toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+            : selectedDate.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })}
+          {isToday && viewMode === 'day' && <span className="tag tag-primary tag-sm">Today</span>}
+        </span>
+      </div>
+      <div className="planner-controls">
+        <div className="planner-nav">
+          <IconButton icon={ChevronLeft} label={viewMode === 'week' ? 'Previous week' : 'Previous day'} onClick={() => go(-1)} />
+          <Button size="sm" variant="ghost" icon={Sun} onClick={() => setSelectedDate(startOfDay(new Date()))} disabled={isToday}>
+            Today
+          </Button>
+          <IconButton icon={ChevronRight} label={viewMode === 'week' ? 'Next week' : 'Next day'} onClick={() => go(1)} />
+          <label className="date-jump" data-tip="Jump to date">
+            <CalendarDays />
             <input
               type="date"
-              className="input date-picker-input"
               value={selectedKey}
               onChange={(e) => {
-                if (e.target.value) {
-                  const [y, m, d] = e.target.value.split('-').map(Number);
-                  setSelectedDate(new Date(y, m - 1, d));
-                }
+                if (!e.target.value) return;
+                const [y, m, d] = e.target.value.split('-').map(Number);
+                setSelectedDate(new Date(y, m - 1, d));
               }}
-              title="Pick a specific date"
+              aria-label="Jump to date"
             />
-
-            {/* Toggle Unscheduled */}
-            <button
-              className={`btn btn-sm ${showUnscheduled ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setShowUnscheduled(!showUnscheduled)}
-            >
-              <Clock size={13} />
-              <span>Unscheduled ({unscheduledTasks.length})</span>
-            </button>
-          </div>
+          </label>
         </div>
-
-        {/* 7-Day Ribbon Strip */}
-        <div className="day-ribbon">
-          {ribbonDays.map((d) => {
-            const isSelected = d.key === selectedKey;
-            const isToday = d.key === todayKey;
-
-            return (
-              <button
-                key={d.key}
-                className={`ribbon-item ${isSelected ? 'selected' : ''} ${isToday ? 'is-today' : ''}`}
-                onClick={() => setSelectedDate(d.date)}
-              >
-                <div className="ribbon-day-name">{d.dayName}</div>
-                <div className="ribbon-date-num">{d.date.getDate()}</div>
-                <div className="ribbon-meta">
-                  {d.count > 0 ? (
-                    <span className="ribbon-count-badge">{d.count} tasks</span>
-                  ) : (
-                    <span className="ribbon-empty-dash">—</span>
-                  )}
-                </div>
-              </button>
-            );
-          })}
-        </div>
+        <Segmented
+          size="sm"
+          value={viewMode}
+          onChange={setViewMode}
+          items={[
+            { value: 'day', label: 'Day', icon: Rows3 },
+            { value: 'week', label: 'Week', icon: Columns3 }
+          ]}
+        />
       </div>
+    </div>
+  );
 
-      {/* Main Content Area */}
-      <div className="day-planner-body">
-        {/* VIEW MODE 1: SINGLE DAY DETAILED BREAKDOWN */}
-        {viewMode === 'single' && (
-          <div className="single-day-view">
-            {/* Day Progress Summary Bar */}
-            <div className="day-summary-card">
-              <div className="day-summary-header">
-                <div>
-                  <h2 className="day-title">
-                    Tasks for{' '}
-                    {selectedDate.toLocaleDateString([], {
-                      weekday: 'short',
-                      month: 'short',
-                      day: 'numeric'
-                    })}
-                  </h2>
-                  <p className="day-subtitle">
-                    {totalCount === 0
-                      ? 'No tasks scheduled for this day yet.'
-                      : `${totalCount} ${totalCount === 1 ? 'task' : 'tasks'} planned • ${completedCount} completed (${progressPercent}%)`}
-                  </p>
-                </div>
+  /* ---------- Week strip ---------- */
+  const strip = (
+    <div className="week-strip">
+      {weekDays.map((d) => {
+        const key = toDateKey(d);
+        const list = byDay.get(key) ?? [];
+        const open = list.filter((t) => t.status !== 'COMPLETED').length;
+        const done = list.length - open;
+        return (
+          <button
+            key={key}
+            className={`ws-day ${key === selectedKey ? 'is-selected' : ''} ${isSameDay(d, now) ? 'is-today' : ''} ${dropDay === key ? 'is-drop' : ''} ${d < startOfDay(now) ? 'is-past' : ''}`}
+            onClick={() => {
+              setSelectedDate(d);
+              if (viewMode === 'week') setViewMode('day');
+            }}
+            {...dayDropProps(d)}
+          >
+            <span className="ws-dow">{d.toLocaleDateString([], { weekday: 'short' })}</span>
+            <span className="ws-num">{d.getDate()}</span>
+            <span className="ws-load" aria-label={`${open} open, ${done} done`}>
+              {Array.from({ length: Math.min(list.length, 4) }).map((_, i) => (
+                <i key={i} className={i < done ? 'done' : ''} />
+              ))}
+              {list.length > 4 && <em>+{list.length - 4}</em>}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
 
-                {totalCount > 0 && (
-                  <div className="day-progress-wrap">
-                    <div className="day-progress-bar">
-                      <div className="day-progress-fill" style={{ width: `${progressPercent}%` }} />
-                    </div>
-                    <span className="day-progress-text">{progressPercent}%</span>
-                  </div>
-                )}
+  /* ---------- Backlog ---------- */
+  const backlogPanel = (
+    <section className="planner-panel backlog">
+      <div className="panel-head">
+        <h3>
+          <Inbox /> Backlog
+        </h3>
+        <span className="count">{backlog.length}</span>
+      </div>
+      <p className="backlog-hint">Unscheduled tasks. Drag one onto the timeline or a day, or plan it for {selectedDate.toLocaleDateString([], { month: 'short', day: 'numeric' })}.</p>
+      {backlog.length === 0 ? (
+        <EmptyState compact icon={CalendarCheck} tone="var(--green)" title="Everything is scheduled" />
+      ) : (
+        <div className="backlog-list">
+          {backlog.map((t) => (
+            <div key={t.id} className={`backlog-card ${dragId === t.id ? 'is-dragging' : ''}`} style={{ ['--q' as string]: quadrantOf(t.eisenhowerQuadrant)?.color ?? 'var(--border-strong)' }} {...dragProps(t)}>
+              <GripVertical className="grip" />
+              <div className="backlog-main" onClick={() => onEditTask(t)}>
+                <span className="backlog-title">{t.title}</span>
+                <QuadrantTag quadrant={t.eisenhowerQuadrant} size="sm" />
               </div>
-
-              {/* Inline Quick Task Creator for this Day */}
-              <form onSubmit={(e) => handleInlineSubmit(e)} className="day-quick-add-form">
-                <Plus size={16} className="text-secondary" />
-                <input
-                  type="text"
-                  className="day-quick-add-input"
-                  placeholder={`Add a task to complete on ${selectedDate.toLocaleDateString([], { month: 'short', day: 'numeric' })}... [Enter]`}
-                  value={inlineTitle}
-                  onChange={(e) => setInlineTitle(e.target.value)}
-                  disabled={isSubmitting}
-                />
-                <button
-                  type="submit"
-                  className="btn btn-primary btn-sm"
-                  disabled={!inlineTitle.trim() || isSubmitting}
-                >
-                  {isSubmitting ? 'Saving...' : 'Add Task'}
-                </button>
-              </form>
+              <IconButton icon={ArrowRight} label={`Plan for ${selectedDate.toLocaleDateString([], { month: 'short', day: 'numeric' })}`} size="sm" tipPos="left" onClick={() => scheduleAt(t.id, selectedDate, DEFAULT_HOUR * 60)} />
             </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 
-            {/* Day Task Breakdown Lists */}
-            {totalCount === 0 ? (
-              <div className="empty-state" style={{ padding: '48px 0' }}>
-                <CalendarDays size={32} className="empty-state-icon" />
-                <div className="empty-state-title">All clear for this day</div>
-                <div className="empty-state-desc">
-                  Add a task above or drag/schedule one from your unscheduled backlog.
-                </div>
+  /* ---------- Day view ---------- */
+  const nowTop = (minutesOf(now) / 60) * HOUR_H;
+
+  const dayView = (
+    <div className="planner-day">
+      <div className="timeline-card">
+        <div
+          className={`timeline ${dragId ? 'is-dragging' : ''}`}
+          ref={scrollRef}
+          onDragOver={(e) => {
+            if (!e.dataTransfer.types.includes(DRAG_MIME)) return;
+            e.preventDefault();
+            const m = minutesFromPointer(e);
+            if (m !== dropMin) setDropMin(m);
+          }}
+          onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setDropMin(null)}
+          onDrop={(e) => {
+            e.preventDefault();
+            const id = e.dataTransfer.getData(DRAG_MIME);
+            const m = minutesFromPointer(e);
+            setDropMin(null);
+            setDragId(null);
+            if (id) scheduleAt(id, selectedDate, m);
+          }}
+        >
+          <div className="timeline-grid" style={{ height: 24 * HOUR_H }}>
+            {Array.from({ length: 24 }).map((_, h) => (
+              <div
+                key={h}
+                className={`hour ${isToday && h < now.getHours() ? 'is-past' : ''}`}
+                style={{ top: h * HOUR_H, height: HOUR_H }}
+                onClick={() => {
+                  setTime(`${String(h).padStart(2, '0')}:00`);
+                  addInputRef.current?.focus();
+                }}
+                title={`Add a task at ${hourLabel(h)}`}
+              >
+                <span className="hour-label">{h === 0 ? '' : hourLabel(h)}</span>
               </div>
-            ) : (
-              <div className="day-sections">
-                {/* 1. Urgent & Do First Section */}
-                {urgentTasks.length > 0 && (
-                  <div className="day-section-group">
-                    <div className="day-section-title urgent">
-                      <span>Urgent & High Impact ({urgentTasks.length})</span>
-                    </div>
-                    <div className="day-task-list">
-                      {urgentTasks.map((t) => (
-                        <PlannerTaskRow
-                          key={t.id}
-                          task={t}
-                          onToggleComplete={onToggleComplete}
-                          onEditTask={onEditTask}
-                          onDeleteTask={onDeleteTask}
-                          onMoveToDay={handleMoveToDay}
-                          onSetCustomDate={handleSetCustomDate}
-                          getQuadrantBadge={getQuadrantBadge}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
+            ))}
 
-                {/* 2. Scheduled & Focus Tasks Section */}
-                {scheduledTasks.length > 0 && (
-                  <div className="day-section-group">
-                    <div className="day-section-title">
-                      <span>Focus & Scheduled Tasks ({scheduledTasks.length})</span>
-                    </div>
-                    <div className="day-task-list">
-                      {scheduledTasks.map((t) => (
-                        <PlannerTaskRow
-                          key={t.id}
-                          task={t}
-                          onToggleComplete={onToggleComplete}
-                          onEditTask={onEditTask}
-                          onDeleteTask={onDeleteTask}
-                          onMoveToDay={handleMoveToDay}
-                          onSetCustomDate={handleSetCustomDate}
-                          getQuadrantBadge={getQuadrantBadge}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* 3. Completed Section */}
-                {completedTasks.length > 0 && (
-                  <div className="day-section-group">
-                    <div className="day-section-title muted">
-                      <span>Completed ({completedTasks.length})</span>
-                    </div>
-                    <div className="day-task-list">
-                      {completedTasks.map((t) => (
-                        <PlannerTaskRow
-                          key={t.id}
-                          task={t}
-                          onToggleComplete={onToggleComplete}
-                          onEditTask={onEditTask}
-                          onDeleteTask={onDeleteTask}
-                          onMoveToDay={handleMoveToDay}
-                          onSetCustomDate={handleSetCustomDate}
-                          getQuadrantBadge={getQuadrantBadge}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
+            {isToday && (
+              <div className="now-line" style={{ top: nowTop }} aria-label={`Now, ${formatTime(now)}`}>
+                <span>{formatTime(now)}</span>
               </div>
             )}
-          </div>
-        )}
 
-        {/* VIEW MODE 2: 7-DAY SPLIT BOARD */}
-        {viewMode === 'week' && (
-          <div className="week-split-grid">
-            {ribbonDays.map((d) => {
-              const dayTasks = tasksByDay.get(d.key) || [];
-              const isToday = d.key === todayKey;
-              const isSelected = d.key === selectedKey;
+            {dropMin !== null && (
+              <div className="drop-ghost" style={{ top: (dropMin / 60) * HOUR_H, height: (BLOCK_MIN / 60) * HOUR_H }}>
+                <span>{formatTime(new Date(2000, 0, 1, Math.floor(dropMin / 60), dropMin % 60))}</span>
+              </div>
+            )}
 
+            {blocks.map(({ t, start, lane, lanes }) => {
+              const done = t.status === 'COMPLETED';
+              const q = quadrantOf(t.eisenhowerQuadrant);
+              const top = Math.min((start / 60) * HOUR_H, 24 * HOUR_H - (BLOCK_MIN / 60) * HOUR_H);
+              const overdue = !done && new Date(t.dueAt!) < now;
               return (
                 <div
-                  key={d.key}
-                  className={`week-day-column ${isToday ? 'is-today-col' : ''} ${isSelected ? 'is-selected-col' : ''}`}
+                  key={t.id}
+                  className={`block ${done ? 'is-done' : ''} ${overdue ? 'is-overdue' : ''} ${dragId === t.id ? 'is-dragging' : ''}`}
+                  style={{
+                    top,
+                    height: (BLOCK_MIN / 60) * HOUR_H - 3,
+                    left: `calc(var(--tl-gutter) + (100% - var(--tl-gutter) - 8px) * ${lane / lanes})`,
+                    width: `calc((100% - var(--tl-gutter) - 8px) / ${lanes} - 4px)`,
+                    ['--q' as string]: q?.color ?? 'var(--primary)'
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEditTask(t);
+                  }}
+                  {...dragProps(t)}
                 >
-                  <div className="week-day-col-header" onClick={() => setSelectedDate(d.date)}>
-                    <div>
-                      <span className="week-day-col-title">{d.dayName}</span>
-                      <span className="week-day-col-date">{d.label}</span>
-                    </div>
-                    <span className="badge">{dayTasks.length}</span>
+                  <TaskCheck size="sm" checked={done} onToggle={() => onToggleComplete(t)} quadrant={t.eisenhowerQuadrant} />
+                  <div className="block-main">
+                    <span className="block-title">
+                      <span className="task-title-text">{t.title}</span>
+                    </span>
+                    <span className="block-time">
+                      {formatTime(new Date(t.dueAt!))}
+                      {t.category ? ` · ${t.category}` : ''}
+                    </span>
                   </div>
-
-                  <div className="week-day-col-tasks">
-                    {dayTasks.length === 0 ? (
-                      <div className="week-col-empty">No tasks</div>
-                    ) : (
-                      dayTasks.map((t) => {
-                        const isCompleted = t.status === 'COMPLETED';
-                        return (
-                          <div
-                            key={t.id}
-                            className={`week-task-card ${isCompleted ? 'completed-card' : ''}`}
-                            onClick={() => onEditTask(t)}
-                          >
-                            <div className="week-task-top">
-                              <span
-                                className={`checkbox-custom-sm ${isCompleted ? 'checked' : ''}`}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onToggleComplete(t);
-                                }}
-                              >
-                                {isCompleted && <CheckCircle2 size={11} />}
-                              </span>
-                              <span className={`week-task-title ${isCompleted ? 'completed' : ''}`}>
-                                {t.title}
-                              </span>
-                            </div>
-
-                            <div className="week-task-badges">
-                              {t.category && <span className="badge">{t.category}</span>}
-                              {t.eisenhowerQuadrant && getQuadrantBadge(t.eisenhowerQuadrant)}
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
+                  <div className="block-actions" onClick={(e) => e.stopPropagation()}>
+                    {taskMenu(t)}
                   </div>
                 </div>
               );
             })}
           </div>
-        )}
+        </div>
+      </div>
 
-        {/* UNSCHEDULED TASKS SIDE DRAWER */}
-        {showUnscheduled && (
-          <div className="unscheduled-drawer">
-            <div className="unscheduled-drawer-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Clock size={16} className="text-secondary" />
-                <span style={{ fontWeight: 600, fontSize: 14 }}>Unscheduled Backlog</span>
-                <span className="badge">{unscheduledTasks.length}</span>
+      <aside className="planner-side">
+        <section className="planner-panel">
+          <div className="day-summary">
+            <ProgressRing value={pct} size={56} stroke={6} color={pct === 100 ? 'var(--green)' : undefined} label={`${pct}%`} labelSize={13} />
+            <div>
+              <div className="t-section">{dayTasks.length === 0 ? 'Open day' : `${doneCount} of ${dayTasks.length} done`}</div>
+              <div className="t-caption">
+                {dayTasks.length === 0 ? 'Nothing scheduled yet.' : `${dayTasks.length - doneCount} remaining${isToday ? ' today' : ''}`}
               </div>
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={() => setShowUnscheduled(false)}
-                title="Close"
-              >
-                ✕
-              </button>
-            </div>
-
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 14 }}>
-              Tasks with no assigned due date. Click <strong>"Schedule"</strong> to assign them to{' '}
-              {selectedDate.toLocaleDateString([], { month: 'short', day: 'numeric' })}.
-            </p>
-
-            <div className="unscheduled-task-list">
-              {unscheduledTasks.length === 0 ? (
-                <div className="empty-state" style={{ padding: '24px 0' }}>
-                  <div className="empty-state-title" style={{ fontSize: 13 }}>No unscheduled tasks</div>
-                  <div className="empty-state-desc" style={{ fontSize: 11 }}>
-                    All your tasks have been scheduled to specific days!
-                  </div>
-                </div>
-              ) : (
-                unscheduledTasks.map((t) => (
-                  <div key={t.id} className="unscheduled-task-card">
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className="unscheduled-task-title">{t.title}</div>
-                      <div className="item-meta">
-                        {t.category && <span className="badge">{t.category}</span>}
-                        {t.eisenhowerQuadrant && getQuadrantBadge(t.eisenhowerQuadrant)}
-                      </div>
-                    </div>
-                    <button
-                      className="btn btn-primary btn-sm"
-                      style={{ fontSize: 11, padding: '4px 8px' }}
-                      onClick={() => handleSetCustomDate(t.id, selectedKey)}
-                      title={`Schedule for ${selectedKey}`}
-                    >
-                      Plan for {selectedDate.toLocaleDateString([], { month: 'short', day: 'numeric' })} →
-                    </button>
-                  </div>
-                ))
-              )}
             </div>
           </div>
+          <form id="planner-add" onSubmit={submit} className="inline-add" style={{ marginTop: 14 }}>
+            <Plus className="inline-add-icon" />
+            <input ref={addInputRef} className="inline-add-input" placeholder={`Add to ${isToday ? 'today' : selectedDate.toLocaleDateString([], { weekday: 'short' })}…`} value={title} onChange={(e) => setTitle(e.target.value)} disabled={isSubmitting} aria-label="New task title" />
+            <input type="time" className="input input-sm inline-add-time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Time" />
+          </form>
+          <div className="quick-add-foot">
+            <span className="t-meta">Tip: click an hour on the timeline to prefill the time.</span>
+            <Button type="submit" form="planner-add" size="sm" variant="primary" disabled={!title.trim()} loading={isSubmitting}>
+              Add task
+            </Button>
+          </div>
+        </section>
+
+        {dayTasks.length > 0 && (
+          <section className="planner-panel">
+            <div className="panel-head">
+              <h3>
+                <CalendarClock /> Move day
+              </h3>
+            </div>
+            <div className="move-list">
+              {dayTasks
+                .filter((t) => t.status !== 'COMPLETED')
+                .slice(0, 6)
+                .map((t) => (
+                  <div key={t.id} className="move-row">
+                    <span className="move-dot" style={{ background: quadrantOf(t.eisenhowerQuadrant)?.color ?? 'var(--text-3)' }} />
+                    <span className="move-title">{t.title}</span>
+                    <RescheduleMenu current={t.dueAt} onPick={(iso) => void onUpdateTaskDate(t.id, iso)} title="Move to" trigger={(p) => <IconButton {...p} icon={CalendarClock} label="Reschedule" size="sm" tipPos="left" />} />
+                  </div>
+                ))}
+            </div>
+          </section>
         )}
-      </div>
+
+        {backlogPanel}
+      </aside>
     </div>
   );
-};
 
-// Reusable Task Row in Day Planner View
-interface PlannerTaskRowProps {
-  task: Task;
-  onToggleComplete: (task: Task) => void;
-  onEditTask: (task: Task) => void;
-  onDeleteTask: (id: string) => void;
-  onMoveToDay: (taskId: string, targetDaysOffset: number) => Promise<void>;
-  onSetCustomDate: (taskId: string, dateString: string) => Promise<void>;
-  getQuadrantBadge: (q?: EisenhowerQuadrant) => React.ReactNode;
-}
-
-const PlannerTaskRow: React.FC<PlannerTaskRowProps> = ({
-  task,
-  onToggleComplete,
-  onEditTask,
-  onDeleteTask,
-  onMoveToDay,
-  onSetCustomDate,
-  getQuadrantBadge
-}) => {
-  const isCompleted = task.status === 'COMPLETED';
+  /* ---------- Week view ---------- */
+  const weekView = (
+    <div className="planner-week-wrap">
+      <div className="week-board">
+        {weekDays.map((d) => {
+          const key = toDateKey(d);
+          const list = byDay.get(key) ?? [];
+          const today = isSameDay(d, now);
+          return (
+            <section key={key} className={`week-col ${today ? 'is-today' : ''} ${dropDay === key ? 'is-drop' : ''} ${d < startOfDay(now) ? 'is-past' : ''}`} {...dayDropProps(d)}>
+              <button
+                className="week-col-head"
+                onClick={() => {
+                  setSelectedDate(d);
+                  setViewMode('day');
+                }}
+              >
+                <span className="ws-dow">{d.toLocaleDateString([], { weekday: 'short' })}</span>
+                <span className="week-col-num">{d.getDate()}</span>
+                {list.length > 0 && <span className="count">{list.length}</span>}
+              </button>
+              <div className="week-col-body">
+                {list.length === 0 ? (
+                  <div className="week-free">Free</div>
+                ) : (
+                  list.map((t) => {
+                    const done = t.status === 'COMPLETED';
+                    return (
+                      <div
+                        key={t.id}
+                        className={`week-card ${done ? 'is-done' : ''} ${dragId === t.id ? 'is-dragging' : ''}`}
+                        style={{ ['--q' as string]: quadrantOf(t.eisenhowerQuadrant)?.color ?? 'var(--border-strong)' }}
+                        onClick={() => onEditTask(t)}
+                        {...dragProps(t)}
+                      >
+                        <TaskCheck size="sm" checked={done} onToggle={() => onToggleComplete(t)} quadrant={t.eisenhowerQuadrant} />
+                        <div className="week-card-main">
+                          <span className="week-card-time">{formatTime(new Date(t.dueAt!))}</span>
+                          <span className="week-card-title">
+                            <span className="task-title-text">{t.title}</span>
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+      {backlogPanel}
+    </div>
+  );
 
   return (
-    <div className={`planner-task-card ${isCompleted ? 'completed-card' : ''}`}>
-      <div
-        className={`checkbox-custom ${isCompleted ? 'checked' : ''}`}
-        onClick={() => onToggleComplete(task)}
-      >
-        {isCompleted && <CheckCircle2 size={13} />}
-      </div>
-
-      <div className="planner-task-info" onClick={() => onEditTask(task)}>
-        <div className={`planner-task-title ${isCompleted ? 'completed' : ''}`}>
-          {task.title}
-        </div>
-
-        <div className="planner-task-meta">
-          {task.category && <span className="badge">{task.category}</span>}
-          {task.eisenhowerQuadrant && getQuadrantBadge(task.eisenhowerQuadrant)}
-          {task.dueAt && (
-            <span className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <Clock size={10} /> {formatDate(task.dueAt)}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Reschedule Shortcuts */}
-      <div className="planner-task-actions">
-        <select
-          className="select select-sm planner-reschedule-select"
-          onChange={(e) => {
-            const val = e.target.value;
-            if (val === 'today') onMoveToDay(task.id, 0);
-            else if (val === 'tomorrow') onMoveToDay(task.id, 1);
-            else if (val === 'in2days') onMoveToDay(task.id, 2);
-            else if (val === 'in3days') onMoveToDay(task.id, 3);
-            else if (val === 'clear') onSetCustomDate(task.id, '');
-            e.target.value = '';
-          }}
-          defaultValue=""
-          title="Move / Reschedule task"
-        >
-          <option value="" disabled>Move to...</option>
-          <option value="today">Today</option>
-          <option value="tomorrow">Tomorrow</option>
-          <option value="in2days">+2 Days</option>
-          <option value="in3days">+3 Days</option>
-          <option value="clear">Clear Date</option>
-        </select>
-
-        <button
-          className="btn btn-ghost btn-icon btn-sm"
-          onClick={() => onDeleteTask(task.id)}
-          title="Delete task"
-        >
-          ✕
-        </button>
-      </div>
+    <div className="planner view-enter">
+      {header}
+      {strip}
+      {viewMode === 'day' ? dayView : weekView}
     </div>
   );
 };

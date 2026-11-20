@@ -1,6 +1,8 @@
-import { useState } from 'react';
-import { X, Bell, Clock } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Bell, AlarmClock, Clock, Timer, Hourglass, Sunrise, CalendarClock, type LucideIcon } from 'lucide-react';
 import type { Task } from '../../types';
+import { addDays, formatDate, toLocalInput } from '../../lib/date';
+import { Button, Dialog } from '../ui';
 
 interface ReminderPickerModalProps {
   task: Task | null;
@@ -9,113 +11,89 @@ interface ReminderPickerModalProps {
   onSetReminder: (taskId: string, remindAtIso: string) => Promise<void>;
 }
 
-export const ReminderPickerModal = ({
-  task,
-  isOpen,
-  onClose,
-  onSetReminder
-}: ReminderPickerModalProps) => {
+interface Preset {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  at: Date;
+}
+
+export const ReminderPickerModal = ({ task, isOpen, onClose, onSetReminder }: ReminderPickerModalProps) => {
   const [customTime, setCustomTime] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  if (!isOpen || !task) return null;
+  useEffect(() => {
+    if (isOpen) {
+      const d = new Date(Date.now() + 60 * 60_000);
+      d.setMinutes(0, 0, 0);
+      setCustomTime(toLocalInput(d));
+    }
+  }, [isOpen]);
 
-  const handlePreset = async (minutesBefore: number) => {
-    setIsSubmitting(true);
+  const set = async (key: string, at: Date) => {
+    if (!task) return;
+    setBusy(key);
     try {
-      let baseTime = task.dueAt ? new Date(task.dueAt).getTime() : Date.now();
-      const remindTime = new Date(baseTime - minutesBefore * 60 * 1000);
-      await onSetReminder(task.id, remindTime.toISOString());
+      await onSetReminder(task.id, at.toISOString());
       onClose();
     } finally {
-      setIsSubmitting(false);
+      setBusy(null);
     }
   };
 
-  const handleCustom = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customTime) return;
-    setIsSubmitting(true);
-    try {
-      await onSetReminder(task.id, new Date(customTime).toISOString());
-      onClose();
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+  const now = Date.now();
+  const presets: Preset[] = [];
+  if (task?.dueAt) {
+    const due = new Date(task.dueAt).getTime();
+    presets.push(
+      { key: 'due', label: 'At due time', icon: AlarmClock, at: new Date(due) },
+      { key: '15', label: '15 min before', icon: Timer, at: new Date(due - 15 * 60_000) },
+      { key: '60', label: '1 hour before', icon: Hourglass, at: new Date(due - 60 * 60_000) }
+    );
+  }
+  presets.push({ key: 'h1', label: 'In 1 hour', icon: Clock, at: new Date(now + 60 * 60_000) });
+  const tm = addDays(new Date(), 1);
+  tm.setHours(9, 0, 0, 0);
+  presets.push({ key: 'tm', label: 'Tomorrow morning', icon: Sunrise, at: tm });
+  const visible = presets.filter((p) => p.key === 'h1' || p.key === 'tm' || p.at.getTime() > now);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
-        <div className="modal-header">
-          <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Bell size={16} /> Set Task Reminder
+    <Dialog open={isOpen && !!task} onClose={onClose} width={460} icon={Bell} title="Set a reminder" subtitle="You'll get an in-app notification at the chosen time.">
+      {task && (
+        <>
+          <div className="task-context">
+            <CalendarClock size={15} className="muted" />
+            <strong>{task.title}</strong>
+            {task.dueAt && <span className="t-meta">due {formatDate(task.dueAt)}</span>}
           </div>
-          <button className="btn btn-ghost btn-icon" onClick={onClose}>
-            <X size={16} />
-          </button>
-        </div>
-
-        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
-          Task: <strong>{task.title}</strong>
-        </p>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
-          {task.dueAt && (
-            <>
-              <button
-                className="btn btn-ghost"
-                style={{ justifyContent: 'flex-start' }}
-                onClick={() => handlePreset(0)}
-                disabled={isSubmitting}
-              >
-                <Clock size={14} /> At due time
-              </button>
-              <button
-                className="btn btn-ghost"
-                style={{ justifyContent: 'flex-start' }}
-                onClick={() => handlePreset(15)}
-                disabled={isSubmitting}
-              >
-                <Clock size={14} /> 15 minutes before due time
-              </button>
-              <button
-                className="btn btn-ghost"
-                style={{ justifyContent: 'flex-start' }}
-                onClick={() => handlePreset(60)}
-                disabled={isSubmitting}
-              >
-                <Clock size={14} /> 1 hour before due time
-              </button>
-            </>
-          )}
-
-          <button
-            className="btn btn-ghost"
-            style={{ justifyContent: 'flex-start' }}
-            onClick={() => handlePreset(-60)}
-            disabled={isSubmitting}
+          <div className="preset-grid">
+            {visible.map((p) => {
+              const Icon = p.icon;
+              return (
+                <button key={p.key} className="preset" disabled={!!busy} onClick={() => set(p.key, p.at)}>
+                  <span className="preset-title">
+                    <Icon /> {p.label}
+                  </span>
+                  <span className="preset-sub">{busy === p.key ? 'Scheduling…' : formatDate(p.at.toISOString())}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="divider-label">or pick a time</div>
+          <form
+            style={{ display: 'flex', gap: 8 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (customTime) void set('custom', new Date(customTime));
+            }}
           >
-            <Clock size={14} /> In 1 hour from now
-          </button>
-        </div>
-
-        <form onSubmit={handleCustom} style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-          <label className="label">Or choose a custom reminder date & time</label>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input
-              type="datetime-local"
-              className="input"
-              value={customTime}
-              onChange={(e) => setCustomTime(e.target.value)}
-              required
-            />
-            <button type="submit" className="btn btn-primary" disabled={isSubmitting || !customTime}>
+            <input type="datetime-local" className="input" value={customTime} onChange={(e) => setCustomTime(e.target.value)} required aria-label="Custom reminder time" />
+            <Button type="submit" variant="primary" loading={busy === 'custom'} disabled={!customTime}>
               Set
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+            </Button>
+          </form>
+        </>
+      )}
+    </Dialog>
   );
 };

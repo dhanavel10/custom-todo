@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/task.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/task_card.dart';
+import '../widgets/ui.dart';
 
 class TasksScreen extends StatefulWidget {
   const TasksScreen({super.key});
@@ -14,8 +16,10 @@ class TasksScreen extends StatefulWidget {
 class TasksScreenState extends State<TasksScreen> {
   List<Task> _tasks = [];
   bool _isLoading = true;
+  bool _failed = false;
   String _searchQuery = '';
-  String _filter = 'ALL'; // ALL, PENDING, COMPLETED, TODAY
+  String _filter = 'ALL'; // ALL, PENDING, TODAY, COMPLETED
+  final _searchCtrl = TextEditingController();
 
   @override
   void initState() {
@@ -23,164 +27,183 @@ class TasksScreenState extends State<TasksScreen> {
     refresh();
   }
 
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> refresh() async {
-    setState(() => _isLoading = true);
+    if (_tasks.isEmpty) setState(() => _isLoading = true);
     try {
       final tasks = await ApiService().fetchTasks();
       if (mounted) {
         setState(() {
           _tasks = tasks;
           _isLoading = false;
+          _failed = false;
         });
       }
     } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _failed = true;
+        });
+      }
     }
   }
 
+  bool _isToday(Task t) {
+    final d = parseDate(t.dueAt);
+    return d != null && DateUtils.isSameDay(d, DateTime.now());
+  }
+
   List<Task> get _filteredTasks {
+    final q = _searchQuery.toLowerCase();
     return _tasks.where((t) {
-      if (_searchQuery.isNotEmpty) {
-        final matches = t.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-            (t.description?.toLowerCase().contains(_searchQuery.toLowerCase()) ?? false);
+      if (q.isNotEmpty) {
+        final matches = t.title.toLowerCase().contains(q) || (t.description?.toLowerCase().contains(q) ?? false) || (t.category?.toLowerCase().contains(q) ?? false);
         if (!matches) return false;
       }
-
       if (_filter == 'PENDING') return !t.isCompleted;
       if (_filter == 'COMPLETED') return t.isCompleted;
-      if (_filter == 'TODAY') {
-        if (t.dueAt == null) return false;
-        try {
-          final dt = DateTime.parse(t.dueAt!);
-          final now = DateTime.now();
-          return dt.year == now.year && dt.month == now.month && dt.day == now.day;
-        } catch (_) {
-          return false;
-        }
-      }
-
+      if (_filter == 'TODAY') return _isToday(t);
       return true;
     }).toList();
   }
 
   @override
   Widget build(BuildContext context) {
+    final p = context.palette;
     final list = _filteredTasks;
+    final filters = <(String, String, int, IconData)>[
+      ('ALL', 'All', _tasks.length, Icons.list_rounded),
+      ('PENDING', 'Pending', _tasks.where((t) => !t.isCompleted).length, Icons.radio_button_unchecked_rounded),
+      ('TODAY', 'Today', _tasks.where(_isToday).length, Icons.today_rounded),
+      ('COMPLETED', 'Completed', _tasks.where((t) => t.isCompleted).length, Icons.check_circle_outline_rounded),
+    ];
 
-    return Column(
-      children: [
-        // Search & Filter Header
-        Container(
-          color: AppColors.surface,
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-          child: Column(
-            children: [
-              TextField(
-                onChanged: (val) => setState(() => _searchQuery = val.trim()),
-                style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
-                decoration: InputDecoration(
-                  hintText: 'Search tasks...',
-                  hintStyle: const TextStyle(fontSize: 13, color: AppColors.textMuted),
-                  prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textMuted),
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  filled: true,
-                  fillColor: AppColors.background,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: AppColors.border),
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+        child: TextField(
+          controller: _searchCtrl,
+          onChanged: (val) => setState(() => _searchQuery = val.trim()),
+          textInputAction: TextInputAction.search,
+          style: AppType.body(p.text),
+          decoration: InputDecoration(
+            hintText: 'Search tasks, notes, categories',
+            prefixIcon: const Icon(Icons.search_rounded, size: 20),
+            fillColor: p.surface,
+            suffixIcon: _searchQuery.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Clear search',
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    onPressed: () {
+                      _searchCtrl.clear();
+                      setState(() => _searchQuery = '');
+                    },
                   ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    _buildFilterChip('ALL', 'All Tasks (${_tasks.length})'),
-                    const SizedBox(width: 6),
-                    _buildFilterChip('PENDING', 'Pending (${_tasks.where((t) => !t.isCompleted).length})'),
-                    const SizedBox(width: 6),
-                    _buildFilterChip('TODAY', 'Today'),
-                    const SizedBox(width: 6),
-                    _buildFilterChip('COMPLETED', 'Completed (${_tasks.where((t) => t.isCompleted).length})'),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        const Divider(height: 1, color: AppColors.border),
-
-        // Task List
-        Expanded(
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary))
-              : RefreshIndicator(
-                  onRefresh: refresh,
-                  color: AppColors.primary,
-                  child: list.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.checklist, size: 36, color: AppColors.textMuted.withValues(alpha: 0.4)),
-                              const SizedBox(height: 8),
-                              const Text('No tasks found matching filter', style: TextStyle(color: AppColors.textMuted, fontSize: 13)),
-                            ],
-                          ),
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(14, 10, 14, 80),
-                          itemCount: list.length,
-                          itemBuilder: (context, idx) {
-                            final task = list[idx];
-                            return TaskCard(
-                              task: task,
-                              onToggle: (done) async {
-                                await ApiService().toggleTaskComplete(task.id, done == true);
-                                refresh();
-                              },
-                              onMoveQuadrant: (q) async {
-                                await ApiService().moveTaskQuadrant(task.id, q);
-                                refresh();
-                              },
-                              onDelete: () async {
-                                await ApiService().deleteTask(task.id);
-                                refresh();
-                              },
-                            );
-                          },
-                        ),
-                ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildFilterChip(String key, String label) {
-    final isSelected = _filter == key;
-    return InkWell(
-      onTap: () => setState(() => _filter = key),
-      borderRadius: BorderRadius.circular(6),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: isSelected ? AppColors.primary : AppColors.background,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(
-            color: isSelected ? AppColors.primary : AppColors.border,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-            color: isSelected ? Colors.white : AppColors.textSecondary,
           ),
         ),
       ),
-    );
+      SizedBox(
+        height: 40,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          itemCount: filters.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 8),
+          itemBuilder: (context, i) {
+            final f = filters[i];
+            final selected = _filter == f.$1;
+            return Pressable(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                setState(() => _filter = f.$1);
+              },
+              child: AnimatedContainer(
+                duration: Motion.base,
+                curve: Motion.out,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                decoration: BoxDecoration(
+                  color: selected ? p.text : p.surface,
+                  borderRadius: BorderRadius.circular(Radii.full),
+                  border: Border.all(color: selected ? p.text : p.border),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(f.$4, size: 16, color: selected ? p.bg : p.text3),
+                  const SizedBox(width: 6),
+                  Text(f.$2, style: AppType.caption(selected ? p.bg : p.text).copyWith(fontWeight: FontWeight.w600)),
+                  const SizedBox(width: 6),
+                  AnimatedSwitcher(
+                    duration: Motion.fast,
+                    child: Text('${f.$3}', key: ValueKey(f.$3), style: AppType.meta(selected ? p.bg.withValues(alpha: 0.7) : p.text3).copyWith(fontWeight: FontWeight.w700)),
+                  ),
+                ]),
+              ),
+            );
+          },
+        ),
+      ),
+      const SizedBox(height: 4),
+      Expanded(
+        child: _isLoading
+            ? const SkeletonList()
+            : _failed && _tasks.isEmpty
+                ? Center(child: SingleChildScrollView(child: ErrorState(message: 'Check the server URL in Settings, then retry.', onRetry: refresh)))
+                : RefreshIndicator(
+                    onRefresh: refresh,
+                    child: list.isEmpty
+                        ? ListView(children: [
+                            const SizedBox(height: 24),
+                            _searchQuery.isNotEmpty
+                                ? EmptyState(icon: Icons.search_off_rounded, title: 'No matches', message: 'Nothing matches “$_searchQuery”.')
+                                : switch (_filter) {
+                                    'COMPLETED' => const EmptyState(icon: Icons.emoji_events_outlined, title: 'Nothing completed yet', message: 'Finished tasks collect here. Swipe right on a task to complete it.'),
+                                    'TODAY' => const EmptyState(icon: Icons.wb_sunny_outlined, title: 'Nothing due today', message: 'Enjoy the breathing room — or plan something in the Day Planner.'),
+                                    'PENDING' => EmptyState(icon: Icons.celebration_outlined, tone: p.green, title: 'All done', message: 'Every task is complete.'),
+                                    _ => const EmptyState(icon: Icons.inbox_outlined, title: 'No tasks yet', message: 'Tap the capture button to add your first task.'),
+                                  },
+                          ])
+                        : ListView.builder(
+                            padding: const EdgeInsets.fromLTRB(16, 6, 16, 110),
+                            itemCount: list.length,
+                            itemBuilder: (context, idx) {
+                              final task = list[idx];
+                              return TweenAnimationBuilder<double>(
+                                key: ValueKey(task.id),
+                                tween: Tween(begin: 0, end: 1),
+                                duration: Duration(milliseconds: 220 + 30 * idx.clamp(0, 8)),
+                                curve: Motion.out,
+                                builder: (context, v, child) => Opacity(opacity: v, child: Transform.translate(offset: Offset(0, 8 * (1 - v)), child: child)),
+                                child: TaskCard(
+                                  task: task,
+                                  onToggle: (done) async {
+                                    await ApiService().toggleTaskComplete(task.id, done == true);
+                                    refresh();
+                                  },
+                                  onMoveQuadrant: (q) async {
+                                    await ApiService().moveTaskQuadrant(task.id, q);
+                                    refresh();
+                                  },
+                                  onDelete: () async {
+                                    await ApiService().deleteTask(task.id);
+                                    if (context.mounted) showToast(context, 'Task deleted', icon: Icons.delete_outline_rounded, color: p.text3);
+                                    refresh();
+                                  },
+                                  onReschedule: (d) async {
+                                    await ApiService().updateTaskDueAt(task.id, d);
+                                    refresh();
+                                  },
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+      ),
+    ]);
   }
 }

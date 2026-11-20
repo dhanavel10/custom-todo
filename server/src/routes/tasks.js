@@ -18,9 +18,9 @@ router.get('/ai-status', async (req, res, next) => {
 });
 
 // GET /api/v1/tasks/matrix - Eisenhower Matrix 4 quadrants
-router.get('/matrix', (req, res, next) => {
+router.get('/matrix', async (req, res, next) => {
   try {
-    const tasks = db.prepare(`
+    const tasks = await db.prepare(`
       SELECT * FROM tasks
       WHERE user_id = ?
         AND status != 'ARCHIVED'
@@ -40,13 +40,13 @@ router.get('/matrix', (req, res, next) => {
 });
 
 // GET /api/v1/tasks/today
-router.get('/today', (req, res, next) => {
+router.get('/today', async (req, res, next) => {
   try {
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).toISOString();
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString();
 
-    const tasks = db.prepare(`
+    const tasks = await db.prepare(`
       SELECT * FROM tasks
       WHERE user_id = ?
         AND status != 'ARCHIVED'
@@ -62,12 +62,12 @@ router.get('/today', (req, res, next) => {
 });
 
 // GET /api/v1/tasks/upcoming
-router.get('/upcoming', (req, res, next) => {
+router.get('/upcoming', async (req, res, next) => {
   try {
     const now = new Date();
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString();
 
-    const tasks = db.prepare(`
+    const tasks = await db.prepare(`
       SELECT * FROM tasks
       WHERE user_id = ?
         AND status != 'ARCHIVED'
@@ -83,11 +83,11 @@ router.get('/upcoming', (req, res, next) => {
 });
 
 // GET /api/v1/tasks/overdue
-router.get('/overdue', (req, res, next) => {
+router.get('/overdue', async (req, res, next) => {
   try {
     const now = new Date().toISOString();
 
-    const tasks = db.prepare(`
+    const tasks = await db.prepare(`
       SELECT * FROM tasks
       WHERE user_id = ?
         AND status != 'ARCHIVED'
@@ -104,7 +104,7 @@ router.get('/overdue', (req, res, next) => {
 });
 
 // GET /api/v1/tasks - Filtered list
-router.get('/', (req, res, next) => {
+router.get('/', async (req, res, next) => {
   try {
     const { status, priority, from, to, q, sort = 'created_at_desc', page = 1, size = 50 } = req.query;
 
@@ -148,7 +148,7 @@ router.get('/', (req, res, next) => {
     query += ' LIMIT ? OFFSET ?';
     params.push(limit, offset);
 
-    const tasks = db.prepare(query).all(...params);
+    const tasks = await db.prepare(query).all(...params);
     res.json(tasks.map(formatTask));
   } catch (err) {
     next(err);
@@ -186,6 +186,7 @@ router.post('/', async (req, res, next) => {
 
     const finalCategory = category || aiResult.category || 'General';
     const finalUrgency = urgency || aiResult.urgency || 'NOT_URGENT';
+    const finalImportance = importance || aiResult.importance || 'NOT_IMPORTANT';
     const finalQuadrant = (eisenhowerQuadrant && eisenhowerQuadrant !== 'AUTO')
       ? eisenhowerQuadrant
       : (aiResult.eisenhowerQuadrant || 'DO_FIRST');
@@ -204,7 +205,7 @@ router.post('/', async (req, res, next) => {
     const taskId = randomUUID();
     const now = new Date().toISOString();
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO tasks (
         id, user_id, capture_id, title, description, status, priority,
         category, urgency, importance, eisenhower_quadrant, is_deadline,
@@ -232,7 +233,7 @@ router.post('/', async (req, res, next) => {
       now
     );
 
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    const task = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
     res.status(201).json(formatTask(task));
   } catch (err) {
     next(err);
@@ -240,13 +241,13 @@ router.post('/', async (req, res, next) => {
 });
 
 // GET /api/v1/tasks/:id
-router.get('/:id', (req, res, next) => {
+router.get('/:id', async (req, res, next) => {
   try {
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const task = await db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!task) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Task not found' } });
     }
-    const reminders = db.prepare('SELECT * FROM reminders WHERE task_id = ? AND user_id = ? ORDER BY remind_at ASC').all(task.id, req.user.id);
+    const reminders = await db.prepare('SELECT * FROM reminders WHERE task_id = ? AND user_id = ? ORDER BY remind_at ASC').all(task.id, req.user.id);
     res.json({
       ...formatTask(task),
       reminders: reminders.map(formatReminder)
@@ -257,9 +258,9 @@ router.get('/:id', (req, res, next) => {
 });
 
 // PATCH /api/v1/tasks/:id
-router.patch('/:id', (req, res, next) => {
+router.patch('/:id', async (req, res, next) => {
   try {
-    const existing = db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const existing = await db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!existing) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Task not found' } });
     }
@@ -283,19 +284,19 @@ router.patch('/:id', (req, res, next) => {
 
     if (status === 'COMPLETED' && existing.status !== 'COMPLETED') {
       completedAt = now;
-      db.prepare("UPDATE reminders SET status = 'CANCELLED' WHERE task_id = ? AND status = 'PENDING'").run(existing.id);
+      await db.prepare("UPDATE reminders SET status = 'CANCELLED' WHERE task_id = ? AND status = 'PENDING'").run(existing.id);
     } else if (status && status !== 'COMPLETED') {
       completedAt = null;
     }
 
     if (status === 'ARCHIVED' && existing.status !== 'ARCHIVED') {
       archivedAt = now;
-      db.prepare("UPDATE reminders SET status = 'CANCELLED' WHERE task_id = ? AND status = 'PENDING'").run(existing.id);
+      await db.prepare("UPDATE reminders SET status = 'CANCELLED' WHERE task_id = ? AND status = 'PENDING'").run(existing.id);
     } else if (status && status !== 'ARCHIVED') {
       archivedAt = null;
     }
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE tasks
       SET title = COALESCE(?, title),
           description = COALESCE(?, description),
@@ -329,7 +330,7 @@ router.patch('/:id', (req, res, next) => {
       req.user.id
     );
 
-    const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
+    const updated = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
     res.json(formatTask(updated));
   } catch (err) {
     next(err);
@@ -337,7 +338,7 @@ router.patch('/:id', (req, res, next) => {
 });
 
 // PATCH /api/v1/tasks/:id/quadrant - Move task to a different Eisenhower quadrant
-router.patch('/:id/quadrant', (req, res, next) => {
+router.patch('/:id/quadrant', async (req, res, next) => {
   try {
     const { quadrant } = req.body;
     const valid = ['DO_FIRST', 'SCHEDULE', 'DELEGATE', 'ELIMINATE'];
@@ -347,7 +348,7 @@ router.patch('/:id/quadrant', (req, res, next) => {
       });
     }
 
-    const existing = db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const existing = await db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!existing) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Task not found' } });
     }
@@ -356,7 +357,7 @@ router.patch('/:id/quadrant', (req, res, next) => {
     const importance = (quadrant === 'DO_FIRST' || quadrant === 'SCHEDULE') ? 'IMPORTANT' : 'NOT_IMPORTANT';
     const now = new Date().toISOString();
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE tasks
       SET eisenhower_quadrant = ?,
           urgency = ?,
@@ -365,7 +366,7 @@ router.patch('/:id/quadrant', (req, res, next) => {
       WHERE id = ? AND user_id = ?
     `).run(quadrant, urgency, importance, now, req.params.id, req.user.id);
 
-    const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
+    const updated = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
     res.json(formatTask(updated));
   } catch (err) {
     next(err);
@@ -375,7 +376,7 @@ router.patch('/:id/quadrant', (req, res, next) => {
 // POST /api/v1/tasks/:id/analyze - Re-analyze an existing task with Ollama AI
 router.post('/:id/analyze', async (req, res, next) => {
   try {
-    const existing = db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const existing = await db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!existing) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Task not found' } });
     }
@@ -390,7 +391,7 @@ router.post('/:id/analyze', async (req, res, next) => {
     const now = new Date().toISOString();
     const finalDueAt = existing.due_at || (aiResult.isDeadline && aiResult.resolvedDeadline ? aiResult.resolvedDeadline : null);
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE tasks
       SET category = ?,
           urgency = ?,
@@ -416,7 +417,7 @@ router.post('/:id/analyze', async (req, res, next) => {
       req.user.id
     );
 
-    const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
+    const updated = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
     res.json(formatTask(updated));
   } catch (err) {
     next(err);
@@ -424,14 +425,14 @@ router.post('/:id/analyze', async (req, res, next) => {
 });
 
 // PATCH /api/v1/tasks/:id/status
-router.patch('/:id/status', (req, res, next) => {
+router.patch('/:id/status', async (req, res, next) => {
   try {
     const { status } = req.body;
     if (!status) {
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Status is required' } });
     }
 
-    const existing = db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const existing = await db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!existing) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Task not found' } });
     }
@@ -442,25 +443,25 @@ router.patch('/:id/status', (req, res, next) => {
 
     if (status === 'COMPLETED') {
       completedAt = now;
-      db.prepare("UPDATE reminders SET status = 'CANCELLED' WHERE task_id = ? AND status = 'PENDING'").run(existing.id);
+      await db.prepare("UPDATE reminders SET status = 'CANCELLED' WHERE task_id = ? AND status = 'PENDING'").run(existing.id);
     } else {
       completedAt = null;
     }
 
     if (status === 'ARCHIVED') {
       archivedAt = now;
-      db.prepare("UPDATE reminders SET status = 'CANCELLED' WHERE task_id = ? AND status = 'PENDING'").run(existing.id);
+      await db.prepare("UPDATE reminders SET status = 'CANCELLED' WHERE task_id = ? AND status = 'PENDING'").run(existing.id);
     } else {
       archivedAt = null;
     }
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE tasks
       SET status = ?, completed_at = ?, archived_at = ?, updated_at = ?
       WHERE id = ? AND user_id = ?
     `).run(status, completedAt, archivedAt, now, req.params.id, req.user.id);
 
-    const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
+    const updated = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
     res.json(formatTask(updated));
   } catch (err) {
     next(err);
@@ -468,9 +469,9 @@ router.patch('/:id/status', (req, res, next) => {
 });
 
 // POST /api/v1/tasks/:id/complete
-router.post('/:id/complete', (req, res, next) => {
+router.post('/:id/complete', async (req, res, next) => {
   try {
-    const existing = db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const existing = await db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!existing) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Task not found' } });
     }
@@ -480,16 +481,16 @@ router.post('/:id/complete', (req, res, next) => {
     const completedAt = newStatus === 'COMPLETED' ? now : null;
 
     if (newStatus === 'COMPLETED') {
-      db.prepare("UPDATE reminders SET status = 'CANCELLED' WHERE task_id = ? AND status = 'PENDING'").run(existing.id);
+      await db.prepare("UPDATE reminders SET status = 'CANCELLED' WHERE task_id = ? AND status = 'PENDING'").run(existing.id);
     }
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE tasks
       SET status = ?, completed_at = ?, updated_at = ?
       WHERE id = ? AND user_id = ?
     `).run(newStatus, completedAt, now, req.params.id, req.user.id);
 
-    const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
+    const updated = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
     res.json(formatTask(updated));
   } catch (err) {
     next(err);
@@ -497,9 +498,9 @@ router.post('/:id/complete', (req, res, next) => {
 });
 
 // DELETE /api/v1/tasks/:id
-router.delete('/:id', (req, res, next) => {
+router.delete('/:id', async (req, res, next) => {
   try {
-    const result = db.prepare('DELETE FROM tasks WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+    const result = await db.prepare('DELETE FROM tasks WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
     if (result.changes === 0) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Task not found' } });
     }
@@ -510,9 +511,9 @@ router.delete('/:id', (req, res, next) => {
 });
 
 // POST /api/v1/tasks/:id/reminders
-router.post('/:id/reminders', (req, res, next) => {
+router.post('/:id/reminders', async (req, res, next) => {
   try {
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const task = await db.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!task) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Task not found' } });
     }
@@ -525,12 +526,12 @@ router.post('/:id/reminders', (req, res, next) => {
     const reminderId = randomUUID();
     const now = new Date().toISOString();
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO reminders (id, user_id, task_id, remind_at, channel, status, created_at)
       VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
     `).run(reminderId, req.user.id, task.id, remindAt, channel, now);
 
-    const reminder = db.prepare('SELECT * FROM reminders WHERE id = ?').get(reminderId);
+    const reminder = await db.prepare('SELECT * FROM reminders WHERE id = ?').get(reminderId);
     res.status(201).json(formatReminder(reminder));
   } catch (err) {
     next(err);

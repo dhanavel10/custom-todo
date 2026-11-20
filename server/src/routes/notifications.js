@@ -6,19 +6,20 @@ const router = express.Router();
 router.use(authenticate);
 
 // GET /api/v1/notifications
-router.get('/', (req, res, next) => {
+router.get('/', async (req, res, next) => {
   try {
-    const notifications = db.prepare(`
+    const notifications = await db.prepare(`
       SELECT * FROM notifications
       WHERE user_id = ?
       ORDER BY created_at DESC
       LIMIT 100
     `).all(req.user.id);
 
-    const unreadCount = db.prepare(`
+    const unreadRow = await db.prepare(`
       SELECT COUNT(*) as count FROM notifications
       WHERE user_id = ? AND read_at IS NULL
-    `).get(req.user.id)?.count || 0;
+    `).get(req.user.id);
+    const unreadCount = Number(unreadRow?.count || 0);
 
     res.json({
       notifications: notifications.map(n => ({
@@ -38,10 +39,10 @@ router.get('/', (req, res, next) => {
 });
 
 // POST /api/v1/notifications/:id/read
-router.post('/:id/read', (req, res, next) => {
+router.post('/:id/read', async (req, res, next) => {
   try {
     const now = new Date().toISOString();
-    const result = db.prepare(`
+    const result = await db.prepare(`
       UPDATE notifications
       SET read_at = ?
       WHERE id = ? AND user_id = ?
@@ -51,7 +52,7 @@ router.post('/:id/read', (req, res, next) => {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Notification not found' } });
     }
 
-    const updated = db.prepare('SELECT * FROM notifications WHERE id = ?').get(req.params.id);
+    const updated = await db.prepare('SELECT * FROM notifications WHERE id = ?').get(req.params.id);
     res.json({
       id: updated.id,
       userId: updated.user_id,
@@ -67,10 +68,10 @@ router.post('/:id/read', (req, res, next) => {
 });
 
 // POST /api/v1/notifications/read-all
-router.post('/read-all', (req, res, next) => {
+router.post('/read-all', async (req, res, next) => {
   try {
     const now = new Date().toISOString();
-    db.prepare(`
+    await db.prepare(`
       UPDATE notifications
       SET read_at = ?
       WHERE user_id = ? AND read_at IS NULL

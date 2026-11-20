@@ -1,0 +1,86 @@
+/* Base: reset, typography, motion primitives */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: var(--lh-body);
+  background: var(--bg);
+  color: var(--text);
+  letter-spacing: -0.006em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  overflow: hidden;
+}
+
+button, input, textarea, select { font: inherit; color: inherit; letter-spacing: inherit; }
+button { cursor: pointer; background: none; border: none; }
+button:disabled { cursor: not-allowed; }
+a { color: var(--primary-text); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img, svg { display: block; flex-shrink: 0; }
+::selection { background: var(--primary-soft-2); }
+
+h1, h2, h3, h4 { font-family: var(--font-display); color: var(--text); font-weight: 700; letter-spacing: -0.02em; }
+
+:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* Text fields draw their own focus state (or none, for borderless writing surfaces) */
+input:focus-visible, textarea:focus-visible, select:focus-visible { box-shadow: none; }
+.input:focus-visible, .textarea:focus-visible, .select:focus-visible { box-shadow: var(--focus-ring); }
+
+/* Scrollbars — quiet until needed */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background-color: var(--text-3); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* Smooth theme switch: applied for a moment by App when toggling */
+html.theme-transition, html.theme-transition *, html.theme-transition *::before, html.theme-transition *::after {
+  transition: background-color 260ms var(--ease-out), border-color 260ms var(--ease-out), color 200ms var(--ease-out), fill 200ms, box-shadow 260ms !important;
+  transition-delay: 0s !important;
+}
+
+/* ---- Type utilities ---- */
+.t-display { font-family: var(--font-display); font-size: var(--text-display); line-height: var(--lh-display); font-weight: 750; letter-spacing: -0.03em; }
+.t-page { font-family: var(--font-display); font-size: var(--text-page); line-height: var(--lh-page); font-weight: 700; letter-spacing: -0.022em; }
+.t-section { font-family: var(--font-display); font-size: var(--text-section); line-height: var(--lh-section); font-weight: 700; letter-spacing: -0.012em; }
+.t-card { font-size: var(--text-card); line-height: var(--lh-card); font-weight: 550; }
+.t-caption { font-size: var(--text-caption); line-height: var(--lh-caption); color: var(--text-2); }
+.t-meta { font-size: var(--text-meta); line-height: var(--lh-meta); color: var(--text-3); }
+.t-eyebrow { font-size: var(--text-micro); font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+.t-mono { font-family: var(--font-mono); font-feature-settings: 'zero'; letter-spacing: -0.01em; }
+.t-num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--text-3); }
+.dim { color: var(--text-2); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---- Keyframes ---- */
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(8px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes pop-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(6px) scale(0.98); } }
+@keyframes drop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes slide-in-right { from { transform: translateX(100%); } to { transform: none; } }
+@keyframes slide-out-right { from { transform: none; } to { transform: translateX(100%); } }
+@keyframes slide-in-left { from { transform: translateX(-100%); } to { transform: none; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+@keyframes pulse-dot { 0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; } 50% { box-shadow: 0 0 0 4px transparent; opacity: 0.85; } }
+@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@keyframes check-pop { 0% { transform: scale(0.6); } 60% { transform: scale(1.15); } 100% { transform: scale(1); } }
+@keyframes check-draw { from { stroke-dashoffset: 18; } to { stroke-dashoffset: 0; } }
+@keyframes ring-burst { from { transform: scale(0.8); opacity: 0.6; } to { transform: scale(1.9); opacity: 0; } }
+@keyframes row-out { to { opacity: 0; transform: translateX(8px); } }
+
+.spin { animation: spin 0.9s linear infinite; }
+.anim-rise { animation: rise-in var(--dur-slow) var(--ease-out) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; scroll-behavior: auto !important; }
+}

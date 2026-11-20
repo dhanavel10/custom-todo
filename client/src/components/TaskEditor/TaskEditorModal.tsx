@@ -1,6 +1,10 @@
-import { useState, useEffect } from 'react';
-import { X, Calendar, AlignLeft, Sparkles, Tag, Layers } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { CalendarClock, Hash, Sparkles, Wand2, X, CircleDot, Flag, SquarePen, Plus } from 'lucide-react';
 import type { Task, TaskPriority, TaskStatus, EisenhowerQuadrant } from '../../types';
+import { QUADRANTS } from '../../lib/quadrants';
+import { addDays, startOfDay, toLocalInput } from '../../lib/date';
+import { Button, Dialog, Kbd, Segmented, isMac } from '../ui';
+import './TaskEditor.css';
 
 interface TaskEditorModalProps {
   task: Partial<Task> | null;
@@ -8,79 +12,83 @@ interface TaskEditorModalProps {
   onClose: () => void;
   onSave: (updates: Partial<Task>) => Promise<void>;
   onReanalyze?: (taskId: string) => Promise<void>;
+  categories?: string[];
 }
 
-export const TaskEditorModal = ({
-  task,
-  isOpen,
-  onClose,
-  onSave,
-  onReanalyze
-}: TaskEditorModalProps) => {
+const PRIORITIES: { value: Exclude<TaskPriority, null> | 'NONE'; label: string }[] = [
+  { value: 'NONE', label: 'None' },
+  { value: 'LOW', label: 'Low' },
+  { value: 'MEDIUM', label: 'Medium' },
+  { value: 'HIGH', label: 'High' },
+  { value: 'URGENT', label: 'Urgent' }
+];
+
+const at = (d: Date, h: number) => {
+  const x = new Date(d);
+  x.setHours(h, 0, 0, 0);
+  return toLocalInput(x);
+};
+
+export const TaskEditorModal = ({ task, isOpen, onClose, onSave, onReanalyze, categories = [] }: TaskEditorModalProps) => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [status, setStatus] = useState<TaskStatus>('TODO');
   const [priority, setPriority] = useState<TaskPriority>(null);
   const [category, setCategory] = useState('');
-  const [eisenhowerQuadrant, setEisenhowerQuadrant] = useState<EisenhowerQuadrant | 'AUTO'>('AUTO');
+  const [quadrant, setQuadrant] = useState<EisenhowerQuadrant | 'AUTO'>('AUTO');
   const [dueAt, setDueAt] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const titleRef = useRef<HTMLTextAreaElement>(null);
 
   const isEditing = Boolean(task && task.id);
 
   useEffect(() => {
-    if (task) {
-      setTitle(task.title || '');
-      setDescription(task.description || '');
-      setStatus(task.status || 'TODO');
-      setPriority(task.priority || null);
-      setCategory(task.category || '');
-      setEisenhowerQuadrant(task.eisenhowerQuadrant || 'AUTO');
-      if (task.dueAt) {
-        const d = new Date(task.dueAt);
-        const pad = (n: number) => String(n).padStart(2, '0');
-        const formatted = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        setDueAt(formatted);
-      } else {
-        setDueAt('');
+    if (!isOpen) return;
+    setTitle(task?.title || '');
+    setDescription(task?.description || '');
+    setStatus(task?.status || 'TODO');
+    setPriority(task?.priority || null);
+    setCategory(task?.category || '');
+    setQuadrant(task?.eisenhowerQuadrant || 'AUTO');
+    setDueAt(task?.dueAt ? toLocalInput(new Date(task.dueAt)) : '');
+    setTimeout(() => {
+      const el = titleRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
       }
-    } else {
-      setTitle('');
-      setDescription('');
-      setStatus('TODO');
-      setPriority(null);
-      setCategory('');
-      setEisenhowerQuadrant('AUTO');
-      setDueAt('');
-    }
-  }, [task]);
+    }, 40);
+  }, [task, isOpen]);
 
-  if (!isOpen) return null;
+  // Grow the title field with its content
+  useEffect(() => {
+    const el = titleRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [title, isOpen]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (!title.trim() || isSaving) return;
-
     setIsSaving(true);
     try {
-      const dueIso = dueAt ? new Date(dueAt).toISOString() : null;
       await onSave({
         title: title.trim(),
         description: description.trim() || null,
         status,
         priority: priority || null,
         category: category.trim() || undefined,
-        eisenhowerQuadrant: eisenhowerQuadrant === 'AUTO' ? undefined : eisenhowerQuadrant,
-        dueAt: dueIso
+        eisenhowerQuadrant: quadrant === 'AUTO' ? undefined : quadrant,
+        dueAt: dueAt ? new Date(dueAt).toISOString() : null
       });
-      onClose();
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleTriggerReanalyze = async () => {
+  const reanalyze = async () => {
     if (!task?.id || !onReanalyze || isAnalyzing) return;
     setIsAnalyzing(true);
     try {
@@ -91,152 +99,165 @@ export const TaskEditorModal = ({
     }
   };
 
+  const today = startOfDay(new Date());
+  const dueChips = [
+    { label: 'Today', value: at(today, 18) },
+    { label: 'Tomorrow', value: at(addDays(today, 1), 9) },
+    { label: 'Next week', value: at(addDays(today, ((8 - today.getDay()) % 7) || 7), 9) }
+  ];
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
-        <div className="modal-header">
-          <div className="modal-title">
-            {isEditing ? 'Edit Task' : 'Add New Task'}
+    <Dialog
+      open={isOpen}
+      onClose={onClose}
+      width={640}
+      icon={isEditing ? SquarePen : Plus}
+      title={isEditing ? 'Edit task' : 'New task'}
+      subtitle={isEditing ? undefined : 'Leave the quadrant on Auto and AI will place it for you.'}
+      footer={
+        <>
+          {isEditing && onReanalyze && (
+            <Button variant="ghost" size="sm" icon={Wand2} onClick={reanalyze} loading={isAnalyzing}>
+              Re-analyze
+            </Button>
+          )}
+          <span className="spacer" />
+          <span className="t-meta hide-sm" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <Kbd>{isMac ? '⌘' : 'Ctrl'}</Kbd>
+            <Kbd>↵</Kbd>
+          </span>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" type="submit" form="task-editor-form" loading={isSaving} disabled={!title.trim()}>
+            {isEditing ? 'Save changes' : 'Create task'}
+          </Button>
+        </>
+      }
+    >
+      <form
+        id="task-editor-form"
+        onSubmit={handleSubmit}
+        className="task-editor"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            void handleSubmit();
+          }
+        }}
+      >
+        <textarea
+          ref={titleRef}
+          className="te-title"
+          rows={1}
+          value={title}
+          onChange={(e) => setTitle(e.target.value.replace(/\n/g, ' '))}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) e.preventDefault();
+          }}
+          placeholder="What needs to be done?"
+          aria-label="Task title"
+          required
+        />
+        <textarea className="te-desc" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Add notes, context, or a date mentioned in passing…" rows={3} aria-label="Description" />
+
+        <div className="te-section">
+          <div className="te-label">
+            <Sparkles /> Quadrant
           </div>
-          <button className="btn btn-ghost btn-icon" onClick={onClose}>
-            <X size={16} />
-          </button>
+          <div className="te-quadrants">
+            <button type="button" className={`te-q auto ${quadrant === 'AUTO' ? 'is-active' : ''}`} onClick={() => setQuadrant('AUTO')}>
+              <Sparkles />
+              <span>
+                <b>Auto</b>
+                <em>AI decides</em>
+              </span>
+            </button>
+            <div className="te-q-grid">
+              {QUADRANTS.map((q) => {
+                const Icon = q.icon;
+                return (
+                  <button type="button" key={q.key} className={`te-q ${quadrant === q.key ? 'is-active' : ''}`} style={{ ['--q' as string]: q.color }} onClick={() => setQuadrant(q.key)} aria-pressed={quadrant === q.key}>
+                    <Icon />
+                    <span>
+                      <b>{q.name}</b>
+                      <em>{q.tagline}</em>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
-        <form onSubmit={handleSubmit}>
-          {/* AI Helper Banner */}
-          <div
-            style={{
-              padding: '10px 12px',
-              backgroundColor: 'var(--bg-secondary)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-sm)',
-              marginBottom: 16,
-              fontSize: '0.78rem',
-              color: 'var(--text-secondary)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8
-            }}
-          >
-            <Sparkles size={14} style={{ color: 'var(--text-primary)', flexShrink: 0 }} />
-            <span>
-              Ollama AI extracts dates, verifies deadlines, detects urgency, and organizes your task into the Eisenhower Matrix.
-            </span>
-          </div>
-
-          <div className="input-group">
-            <label className="label">Task Title / Action</label>
-            <input
-              type="text"
-              className="input"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Prepare presentation slides for Q4 roadmap"
-              required
-              autoFocus
-            />
-          </div>
-
-          <div className="input-group">
-            <label className="label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <AlignLeft size={13} /> Description & Context
+        <div className="te-grid">
+          <div className="field">
+            <label className="field-label" htmlFor="te-due">
+              <CalendarClock /> Due
             </label>
-            <textarea
-              className="textarea"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Add details, notes, or dates mentioned in context (e.g. 'Must submit by next Friday for review')..."
-              rows={3}
+            <div className="te-due">
+              <input id="te-due" type="datetime-local" className="input" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
+              {dueAt && <Button size="sm" variant="ghost" icon={X} aria-label="Clear due date" onClick={() => setDueAt('')} />}
+            </div>
+            <div className="te-chips">
+              {dueChips.map((c) => (
+                <button type="button" key={c.label} className={`chip ${dueAt === c.value ? 'is-active' : ''}`} onClick={() => setDueAt(c.value)}>
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="te-cat">
+              <Hash /> Category
+            </label>
+            <input id="te-cat" className="input" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Auto-detected if empty" list="te-categories" />
+            <datalist id="te-categories">
+              {categories.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
+          </div>
+        </div>
+
+        <div className="te-grid">
+          <div className="field">
+            <span className="field-label">
+              <CircleDot /> Status
+            </span>
+            <Segmented
+              size="sm"
+              value={status}
+              onChange={(v) => setStatus(v as TaskStatus)}
+              items={[
+                ...(task?.status === 'INBOX' ? [{ value: 'INBOX' as TaskStatus, label: 'Inbox' }] : []),
+                { value: 'TODO', label: 'To do' },
+                { value: 'IN_PROGRESS', label: 'Doing' },
+                { value: 'COMPLETED', label: 'Done' },
+                { value: 'ARCHIVED', label: 'Archived' }
+              ]}
             />
           </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <div className="input-group">
-              <label className="label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Calendar size={13} /> Deadline / Due Date
-              </label>
-              <input
-                type="datetime-local"
-                className="input"
-                value={dueAt}
-                onChange={(e) => setDueAt(e.target.value)}
-              />
-            </div>
-
-            <div className="input-group">
-              <label className="label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Tag size={13} /> Category
-              </label>
-              <input
-                type="text"
-                className="input"
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                placeholder="Auto-detected by AI if empty"
-              />
-            </div>
+          <div className="field">
+            <span className="field-label">
+              <Flag /> Priority
+            </span>
+            <Segmented size="sm" value={priority ?? 'NONE'} onChange={(v) => setPriority(v === 'NONE' ? null : (v as TaskPriority))} items={PRIORITIES} />
           </div>
+        </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <div className="input-group">
-              <label className="label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Layers size={13} /> Eisenhower Quadrant
-              </label>
-              <select
-                className="select"
-                value={eisenhowerQuadrant}
-                onChange={(e) => setEisenhowerQuadrant(e.target.value as EisenhowerQuadrant | 'AUTO')}
-              >
-                <option value="AUTO">✨ AI Auto-Classify (Based on Input)</option>
-                <option value="DO_FIRST">Q1: Do First (Urgent & Important)</option>
-                <option value="SCHEDULE">Q2: Schedule (Important, Not Urgent)</option>
-                <option value="DELEGATE">Q3: Delegate (Urgent, Not Important)</option>
-                <option value="ELIMINATE">Q4: Eliminate (Not Urgent, Not Important)</option>
-              </select>
+        {isEditing && task?.aiAnalysis && (
+          <div className="ai-why te-ai">
+            <div className="ai-why-head">
+              <Sparkles /> {task.aiAnalysis.source === 'ollama' ? 'AI analysis' : 'NLP analysis'} · {task.aiAnalysis.model}
+              <span className="ai-why-scores">
+                U {task.aiAnalysis.urgencyScore}/10 · I {task.aiAnalysis.importanceScore}/10
+              </span>
             </div>
-
-            <div className="input-group">
-              <label className="label">Status</label>
-              <select
-                className="select"
-                value={status}
-                onChange={(e) => setStatus(e.target.value as TaskStatus)}
-              >
-                <option value="TODO">To Do</option>
-                <option value="IN_PROGRESS">In Progress</option>
-                <option value="INBOX">Inbox</option>
-                <option value="COMPLETED">Completed</option>
-                <option value="ARCHIVED">Archived</option>
-              </select>
-            </div>
+            <p>{task.aiAnalysis.reasoning}</p>
           </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 24 }}>
-            {isEditing && onReanalyze && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={handleTriggerReanalyze}
-                disabled={isAnalyzing}
-                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-              >
-                <Sparkles size={13} />
-                {isAnalyzing ? 'Analyzing...' : 'Re-analyze with Ollama'}
-              </button>
-            )}
-
-            <div style={{ display: 'flex', gap: 10, marginLeft: 'auto' }}>
-              <button type="button" className="btn btn-ghost" onClick={onClose}>
-                Cancel
-              </button>
-              <button type="submit" className="btn btn-primary" disabled={isSaving}>
-                {isSaving ? 'Saving...' : isEditing ? 'Save Changes' : 'Create Task'}
-              </button>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
+        )}
+      </form>
+    </Dialog>
   );
 };

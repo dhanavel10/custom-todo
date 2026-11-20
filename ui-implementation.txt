@@ -1,0 +1,767 @@
+# ROLE: Principal Product Designer + Senior React & Flutter UI Engineer
+
+I want you to completely redesign the UI/UX of my existing Productivity Inbox application.
+
+This is not a simple CSS refresh. I want a significant visual transformation across the ENTIRE application, including the React Web application and Flutter Mobile application.
+
+Your goal is to make this application look like a premium, professionally designed productivity product that could compete with applications such as Linear, Things 3, Sunsama, Akiflow, and Motion.
+
+The final result must have its own distinctive visual identity rather than copying any of these applications.
+
+---
+
+# 1. FIRST: UNDERSTAND THE EXISTING APPLICATION
+
+Before making changes:
+
+1. Inspect the complete project structure.
+2. Understand the existing React application inside `client/`.
+3. Understand the existing Flutter application inside `mobile/`.
+4. Identify all existing pages, shared components, modals, dialogs, navigation elements, and theme implementations.
+5. Understand the existing API integrations, state management, database models, and business logic.
+6. Identify reusable components and existing design inconsistencies.
+
+Do not immediately start changing random CSS files.
+
+First understand how the existing application works so the redesign does not break any functionality.
+
+IMPORTANT:
+- Preserve all existing functionality.
+- Do not remove working features.
+- Do not change backend APIs or database schemas unless absolutely necessary.
+- Do not replace existing business logic with mock implementations.
+- Do not introduce dummy tasks or hardcoded dashboard statistics.
+- Use actual application data.
+- Preserve existing navigation and workflows.
+- Do not break authentication, task management, AI classification, notifications, reminders, or persistence.
+
+---
+
+# 2. DESIGN VISION: CREATE A UNIQUE PRODUCT IDENTITY
+
+I don't want another generic Bootstrap dashboard or ordinary admin panel.
+
+Create a unique design language for my Productivity Inbox application.
+
+Design inspiration:
+- Linear: refined interface and excellent information hierarchy.
+- Things 3: beautiful task organization.
+- Sunsama: daily planning experience.
+- Motion: intelligent scheduling concepts.
+- Notion: clean typography and structured content.
+- Raycast: premium dark interface and keyboard interactions.
+
+Do not copy their designs. Take inspiration from their design quality and create an original visual identity.
+
+### Visual direction
+
+Create a premium productivity workspace using:
+
+- Deep graphite and midnight backgrounds for dark mode.
+- Warm off-white and subtle neutral backgrounds for light mode.
+- Electric violet / indigo as the primary accent.
+- Carefully selected teal, amber, coral, and green for contextual states.
+- Beautiful typography with strong hierarchy.
+- Generous spacing and consistent alignment.
+- Subtle borders and layered surfaces.
+- Carefully designed shadows.
+- Smooth transitions and micro-interactions.
+- Beautiful icons instead of excessive text labels.
+
+Avoid:
+- Generic dashboard templates.
+- Excessive gradients.
+- Excessive glassmorphism.
+- Too many rounded cards.
+- Excessive borders.
+- Oversized headings.
+- Unnecessary decorative elements.
+- Random colors across different pages.
+- Cluttered layouts.
+
+The UI should feel sophisticated, focused, lightweight, and highly usable.
+
+---
+
+# 3. BUILD A COMPLETE DESIGN SYSTEM
+
+Before redesigning individual pages, establish a reusable design system.
+
+Implement:
+
+### Color system
+- Primary
+- Secondary
+- Background
+- Surface
+- Elevated surface
+- Border
+- Text primary
+- Text secondary
+- Muted text
+- Success
+- Warning
+- Error
+- Information
+
+Support both light and dark themes.
+
+### Typography
+Establish a consistent typography scale:
+- Display
+- Page heading
+- Section heading
+- Card heading
+- Body
+- Caption
+- Metadata
+
+Use a premium, readable font combination.
+
+### Components
+
+Create reusable components for:
+
+- Buttons
+- Icon buttons
+- Task cards
+- Note cards
+- Status indicators
+- Priority badges
+- Category labels
+- Progress indicators
+- Search fields
+- Input fields
+- Dropdowns
+- Tabs
+- Tooltips
+- Popovers
+- Dialogs
+- Bottom sheets
+- Empty states
+- Loading states
+- Toast notifications
+- Confirmation dialogs
+- Date pickers
+- Navigation items
+- Floating action buttons
+
+All components must follow the same visual language.
+
+Avoid implementing the same component differently on every page.
+
+---
+
+# 4. REACT WEB APPLICATION REDESIGN
+
+Redesign EVERY existing React page.
+
+## A. Main application shell
+
+Completely redesign:
+
+- Sidebar
+- Top navigation
+- Page header
+- Quick Capture bar
+- Notification drawer
+- Settings modal
+
+### Sidebar
+
+Create a sophisticated navigation experience.
+
+Navigation items:
+
+- Eisenhower Matrix
+- Day Planner
+- Today
+- Inbox
+- Upcoming
+- All Tasks
+- Idea Pad
+- Overdue
+- Study Plans
+
+Requirements:
+- Beautiful active navigation indicators.
+- Custom icon treatment.
+- Subtle hover interactions.
+- Notification/count badges.
+- Collapsible sidebar.
+- Smooth collapse/expand animation.
+- Clear grouping of navigation items.
+- Responsive behavior for smaller screens.
+
+Do not make the sidebar look like a traditional admin dashboard.
+
+### Top navigation
+
+Include:
+- Dynamic page title.
+- Add Task action.
+- Global search.
+- Notification center.
+- Theme toggle.
+- Settings.
+
+Create a clean, compact toolbar with proper spacing.
+
+### Quick Capture
+
+This is an important feature of the application.
+
+Redesign it as a beautiful, intelligent command input.
+
+Requirements:
+- Keyboard shortcut Ctrl+K.
+- Clear focus state.
+- Smooth expansion.
+- Placeholder suggestions.
+- Enter-to-submit interaction.
+- Attractive quick capture experience.
+
+It should feel like a command palette rather than a normal text input.
+
+---
+
+## B. Eisenhower Matrix
+
+This is one of the most important pages.
+
+Create a visually impressive four-quadrant experience.
+
+Quadrants:
+1. Do First
+2. Schedule
+3. Delegate
+4. Eliminate
+
+Requirements:
+
+- Four visually distinguishable quadrants.
+- Unique but coordinated quadrant identities.
+- Beautiful task cards.
+- Clear task priority indicators.
+- Task counts.
+- Drag-and-drop animations.
+- Smooth card movement between quadrants.
+- Inline task creation.
+- Quick task completion.
+- Edit and delete interactions.
+- AI classification indicator.
+- AI re-analysis action.
+- Attractive empty states.
+
+Make the matrix visually balanced.
+
+On desktop, use an effective four-quadrant layout.
+
+On mobile, use a carefully designed mobile-friendly quadrant navigation instead of squeezing four columns into a small screen.
+
+The matrix should be one of the most visually memorable screens in the application.
+
+---
+
+## C. Study Plans
+
+Redesign the study plan listing page.
+
+Requirements:
+- Attractive plan cards.
+- Progress visualization.
+- Completion percentage.
+- Missed sessions indicator.
+- Next scheduled concept.
+- Due date and time.
+- Plan status.
+- New Plan action.
+
+Create an engaging visual hierarchy.
+
+Do not make the cards look like ordinary rectangular database records.
+
+### Study Plan Detail
+
+Redesign the complete plan detail page.
+
+Include:
+- Plan title and description.
+- Overall progress.
+- Completion statistics.
+- Day-wise learning schedule.
+- Individual concept cards.
+- Completed, upcoming, and missed states.
+- Reschedule action.
+- Completion interaction.
+
+Use an elegant timeline-based layout.
+
+The progress visualization should feel meaningful and interactive.
+
+---
+
+## D. Day Planner
+
+Create an attractive calendar-based scheduling experience.
+
+Requirements:
+- Beautiful date navigation.
+- Day and week views where appropriate.
+- Timeline-based task organization.
+- Task duration visualization.
+- Drag-and-drop task scheduling.
+- Quick-add task functionality.
+- Completed task styling.
+- Current-time indicator.
+- Empty schedule states.
+
+The day planner should look like a premium personal scheduling application.
+
+---
+
+## E. Today
+
+Create a focused daily productivity dashboard.
+
+Include:
+- Today's date.
+- Daily progress.
+- Completed versus remaining tasks.
+- Today's schedule.
+- Priority tasks.
+- Overdue reminders where relevant.
+- Quick task creation.
+
+Create a motivating but minimal experience.
+
+Avoid filling the screen with unnecessary statistics.
+
+---
+
+## F. Inbox
+
+Redesign the capture inbox.
+
+Include:
+- Unprocessed captures.
+- AI-detected task type.
+- Suggested date.
+- Suggested category.
+- Convert to task.
+- Convert to note.
+- Delete action.
+
+Clearly distinguish raw captures from organized tasks.
+
+Use an attractive inbox-style layout.
+
+---
+
+## G. Upcoming
+
+Create a future task management experience.
+
+Include:
+- Date-based grouping.
+- Upcoming deadlines.
+- Priority indicators.
+- Calendar navigation where appropriate.
+- Quick editing.
+- Task completion.
+- Empty state.
+
+Make upcoming tasks easy to scan.
+
+---
+
+## H. All Tasks
+
+Redesign the complete task listing experience.
+
+Include:
+- All
+- Todo
+- In Progress
+- Completed
+- Archived
+
+Requirements:
+- Attractive filter tabs.
+- Task count indicators.
+- Search.
+- Category filters if supported.
+- Priority visualization.
+- Due date indicators.
+- Task status.
+- Quick completion.
+- Edit and delete actions.
+
+Use a beautiful task-list design with appropriate visual density.
+
+---
+
+## I. Idea Pad
+
+This page should have a creative, distraction-free appearance.
+
+Redesign:
+- Notes grid.
+- Note cards.
+- Pinned notes.
+- Markdown editor.
+- Autosave indicator.
+- Archive.
+- Delete.
+- Convert to task.
+
+Make it feel like a modern digital notebook.
+
+The note editor should have excellent typography and comfortable writing space.
+
+---
+
+## J. Overdue
+
+Create a dedicated overdue management screen.
+
+Include:
+- Overdue task count.
+- Deadline information.
+- Days/hours overdue.
+- Priority visualization.
+- Quick reschedule.
+- Complete action.
+- Edit action.
+
+Use warning colors carefully without making the whole page look alarming.
+
+---
+
+## K. Shared components and modals
+
+Redesign all shared elements:
+
+- Task editor modal.
+- Reminder picker.
+- Reschedule popup.
+- Notification drawer.
+- Settings modal.
+- Profile settings.
+- Review time settings.
+- Lead time configuration.
+- Theme settings.
+- Data export.
+- Sign-in page.
+- Registration page.
+
+All modals should have consistent spacing, typography, button styles, animations, and interaction patterns.
+
+---
+
+# 5. FLUTTER MOBILE APPLICATION REDESIGN
+
+The Flutter application must not simply look like a compressed version of the React web application.
+
+Design it as a premium native mobile productivity application.
+
+Use mobile-first UX principles.
+
+The React and Flutter applications should share the same visual identity, color system, typography, component language, and interaction philosophy.
+
+However, each platform should use layouts and interactions appropriate to its screen size.
+
+## A. Mobile application shell
+
+Redesign:
+- App bar.
+- Bottom navigation.
+- Page transitions.
+- Notifications sheet.
+- Settings dialog.
+- Quick Capture bottom sheet.
+
+Requirements:
+- Beautiful bottom navigation.
+- Proper selected-tab indicators.
+- Consistent safe-area handling.
+- Smooth page transitions.
+- Proper keyboard handling.
+- Touch-friendly controls.
+- Responsive layouts for different phone sizes.
+
+Do not use desktop-style sidebars on mobile.
+
+## B. Mobile Eisenhower Matrix
+
+Create a mobile-specific matrix experience.
+
+Requirements:
+- Quadrant selector.
+- Attractive quadrant cards.
+- Smooth transitions.
+- Task cards with priority indicators.
+- Quick-add interaction.
+- Move-to-quadrant menu.
+- Task completion animation.
+- AI classification information.
+- AI model and reasoning display.
+- Retry connection action.
+
+Do not squeeze the desktop matrix into a mobile screen.
+
+## C. Mobile Day Planner
+
+Redesign:
+- Seven-day date ribbon.
+- Selected date indicator.
+- Daily task timeline.
+- Task cards.
+- Add Task for This Day action.
+- Drag-and-drop or suitable mobile rescheduling interaction.
+
+The date selector should be visually engaging and easy to navigate.
+
+## D. Mobile Inbox & Tasks
+
+Redesign:
+- Search.
+- Filter chips.
+- All.
+- Pending.
+- Today.
+- Completed.
+- Task cards.
+- Context menus.
+- Move task.
+- Complete.
+- Delete.
+
+Make it feel like a polished native mobile experience.
+
+## E. Mobile Notes
+
+Redesign:
+- Notes grid/list.
+- Note preview cards.
+- New Note interaction.
+- Markdown editing.
+- Save Note dialog.
+- Empty state.
+
+Prioritize writing comfort and simple navigation.
+
+## F. Mobile shared components
+
+Redesign:
+- Quick Capture bottom sheet.
+- Notifications sheet.
+- Settings dialog.
+- Server URL configuration.
+- Ollama AI status.
+- Test Connection.
+- Save & Reconnect.
+- Loading indicators.
+- Error states.
+- Confirmation dialogs.
+
+All interactions must be mobile-friendly.
+
+IMPORTANT:
+
+Do not introduce Study Plans, Today, Upcoming, Overdue, or separate Inbox-capture functionality into Flutter as part of this UI-only redesign unless explicitly requested.
+
+Preserve the existing mobile feature scope.
+
+---
+
+# 6. INTERACTIONS AND ANIMATIONS
+
+I want the application to feel alive.
+
+Implement meaningful micro-interactions throughout both applications.
+
+Examples:
+
+1. Smooth task completion animation.
+2. Subtle hover effects on web task cards.
+3. Animated navigation indicators.
+4. Smooth modal entrance and exit.
+5. Expandable task details.
+6. Animated progress bars.
+7. Drag-and-drop feedback.
+8. Beautiful button press states.
+9. Animated empty states.
+10. Smooth theme switching.
+11. Skeleton loading screens.
+12. Toast notification animations.
+13. Interactive date selection.
+14. Smooth bottom sheet transitions on mobile.
+
+Use animations thoughtfully.
+
+Do not animate everything unnecessarily.
+
+Performance is more important than decorative animation.
+
+---
+
+# 7. RESPONSIVE DESIGN
+
+React Web must work properly on:
+
+- Large desktop monitors.
+- Standard laptops.
+- Tablets.
+- Small browser windows.
+- Mobile browser screens.
+
+Flutter must work properly on:
+
+- Small Android phones.
+- Standard Android phones.
+- Large Android phones.
+- Different screen densities.
+
+Avoid:
+- Horizontal overflow.
+- Clipped content.
+- Inconsistent spacing.
+- Tiny touch targets.
+- Fixed widths that break layouts.
+- Overlapping dialogs.
+- Keyboard covering input fields.
+
+---
+
+# 8. TECHNICAL IMPLEMENTATION RULES
+
+### React
+
+- Inspect and reuse the existing stack.
+- Prefer reusable components.
+- Use the existing routing architecture.
+- Keep components modular.
+- Maintain existing state management.
+- Maintain API integration.
+- Avoid unnecessary dependencies.
+- Use CSS variables/design tokens or the existing styling system.
+- Avoid massive single-file components.
+- Ensure responsive behavior.
+
+### Flutter
+
+- Follow the existing project architecture.
+- Create reusable widgets.
+- Centralize design tokens.
+- Use ThemeData consistently.
+- Support light and dark themes.
+- Use appropriate Flutter animations.
+- Preserve existing state management and API integration.
+- Avoid putting the entire UI inside large build methods.
+- Ensure good widget performance.
+
+### Both applications
+
+Keep the design systems visually consistent.
+
+Where possible, use matching:
+- Colors.
+- Typography.
+- Spacing.
+- Radius.
+- Icons.
+- Status indicators.
+- Interaction patterns.
+
+Do not force identical layouts across platforms.
+
+---
+
+# 9. QUALITY CONTROL
+
+After implementing the redesign:
+
+1. Run the React application.
+2. Run the Flutter application.
+3. Check for compilation errors.
+4. Check all existing navigation routes.
+5. Test task creation.
+6. Test task completion.
+7. Test task editing and deletion.
+8. Test drag-and-drop.
+9. Test reminders and notifications.
+10. Test theme switching.
+11. Test search and filters.
+12. Test study plan interactions.
+13. Test note autosave.
+14. Test mobile interactions.
+15. Check responsive layouts.
+
+Fix any regressions introduced by the redesign.
+
+Do not claim that a feature works unless you have actually tested it.
+
+---
+
+# 10. IMPLEMENTATION STRATEGY
+
+Work systematically.
+
+PHASE 1:
+Audit the complete existing project and identify the design architecture.
+
+PHASE 2:
+Create the shared design system for React and Flutter.
+
+PHASE 3:
+Redesign the React application shell and shared components.
+
+PHASE 4:
+Redesign all React pages individually.
+
+PHASE 5:
+Redesign Flutter application shell and shared components.
+
+PHASE 6:
+Redesign all existing Flutter pages individually.
+
+PHASE 7:
+Implement animations and interactions.
+
+PHASE 8:
+Run the applications and fix issues.
+
+Do not stop after creating a design proposal or a single redesigned screen.
+
+Actually implement the redesign in the existing source code.
+
+Do not leave half-finished pages or placeholder components.
+
+If the implementation is too large for one execution, work in logical phases and maintain a checklist of completed and remaining work.
+
+---
+
+# 11. FINAL EXPECTATION
+
+I want the final application to feel like a premium, production-ready productivity product.
+
+The design must be:
+
+- Unique.
+- Modern.
+- Elegant.
+- Interactive.
+- Consistent.
+- Responsive.
+- Visually memorable.
+- Easy to use.
+- Professionally implemented.
+
+Every page must receive attention.
+
+Do not focus only on the dashboard and leave secondary pages with the old design.
+
+The entire React and Flutter applications must feel like two versions of the same beautifully designed product.
+
+**Most importantly: Prioritize exceptional UI quality and usability over simply finishing the redesign quickly.**

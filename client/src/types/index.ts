@@ -40,7 +40,9 @@ export interface AIStatus {
 export interface User {
   id: string;
   email: string;
+  username?: string | null;
   displayName: string | null;
+  avatarUrl?: string | null;
   timeZone: string;
   createdAt: string;
 }
@@ -53,6 +55,16 @@ export interface UserPreferences {
   daily_review_evening_time: string;
   lead_time_minutes: number;
   in_app_notifications: number;
+}
+
+/** Body accepted by PATCH /me/preferences (the server reads camelCase keys). */
+export interface PreferencesUpdate {
+  dailyReviewMorningEnabled?: boolean;
+  dailyReviewMorningTime?: string;
+  dailyReviewEveningEnabled?: boolean;
+  dailyReviewEveningTime?: string;
+  leadTimeMinutes?: number;
+  inAppNotifications?: boolean;
 }
 
 export interface Capture {
@@ -125,4 +137,48 @@ export interface Notification {
   body: string;
   readAt: string | null;
   createdAt: string;
+}
+
+export type PlanItemStatus = 'PENDING' | 'COMPLETED' | 'MISSED';
+
+export interface PlanItem {
+  id: string;
+  planId: string;
+  title: string;
+  notes: string | null;
+  dayNumber: number;
+  scheduledAt: string;
+  durationMinutes: number;
+  status: PlanItemStatus;
+  remindedAt: string | null;
+  missedAt: string | null;
+  completedAt: string | null;
+  rescheduleCount: number;
+}
+
+export interface PlanSummary {
+  id: string;
+  title: string;
+  description: string | null;
+  createdAt: string;
+  totalItems: number;
+  completedItems: number;
+  missedItems: number;
+  nextItemAt: string | null;
+}
+
+export interface Plan extends PlanSummary {
+  items: PlanItem[];
+}
+
+export interface MissedPlanItem extends PlanItem {
+  planTitle: string;
+}
+
+export interface NewPlanItem {
+  title: string;
+  notes?: string;
+  dayNumber: number;
+  scheduledAt: string;
+  durationMinutes?: number;
 }

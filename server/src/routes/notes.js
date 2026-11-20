@@ -7,7 +7,7 @@ const router = express.Router();
 router.use(authenticate);
 
 // GET /api/v1/notes
-router.get('/', (req, res, next) => {
+router.get('/', async (req, res, next) => {
   try {
     const { q, pinned, archived } = req.query;
     let query = 'SELECT * FROM notes WHERE user_id = ?';
@@ -30,7 +30,7 @@ router.get('/', (req, res, next) => {
 
     query += ' ORDER BY is_pinned DESC, updated_at DESC';
 
-    const notes = db.prepare(query).all(...params);
+    const notes = await db.prepare(query).all(...params);
     res.json(notes.map(formatNote));
   } catch (err) {
     next(err);
@@ -38,18 +38,18 @@ router.get('/', (req, res, next) => {
 });
 
 // POST /api/v1/notes - Create an empty or populated note
-router.post('/', (req, res, next) => {
+router.post('/', async (req, res, next) => {
   try {
     const { title = '', content = '', isPinned = false } = req.body;
     const noteId = randomUUID();
     const now = new Date().toISOString();
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO notes (id, user_id, title, content, is_pinned, is_archived, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, 0, ?, ?)
     `).run(noteId, req.user.id, title || null, content, isPinned ? 1 : 0, now, now);
 
-    const note = db.prepare('SELECT * FROM notes WHERE id = ?').get(noteId);
+    const note = await db.prepare('SELECT * FROM notes WHERE id = ?').get(noteId);
     res.status(201).json(formatNote(note));
   } catch (err) {
     next(err);
@@ -57,9 +57,9 @@ router.post('/', (req, res, next) => {
 });
 
 // GET /api/v1/notes/:id
-router.get('/:id', (req, res, next) => {
+router.get('/:id', async (req, res, next) => {
   try {
-    const note = db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const note = await db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!note) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Note not found' } });
     }
@@ -70,9 +70,9 @@ router.get('/:id', (req, res, next) => {
 });
 
 // PATCH /api/v1/notes/:id - Autosave / update note
-router.patch('/:id', (req, res, next) => {
+router.patch('/:id', async (req, res, next) => {
   try {
-    const existing = db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const existing = await db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!existing) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Note not found' } });
     }
@@ -80,7 +80,7 @@ router.patch('/:id', (req, res, next) => {
     const { title, content, isPinned, isArchived } = req.body;
     const now = new Date().toISOString();
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE notes
       SET title = COALESCE(?, title),
           content = COALESCE(?, content),
@@ -98,7 +98,7 @@ router.patch('/:id', (req, res, next) => {
       req.user.id
     );
 
-    const updated = db.prepare('SELECT * FROM notes WHERE id = ?').get(req.params.id);
+    const updated = await db.prepare('SELECT * FROM notes WHERE id = ?').get(req.params.id);
     res.json(formatNote(updated));
   } catch (err) {
     next(err);
@@ -106,19 +106,19 @@ router.patch('/:id', (req, res, next) => {
 });
 
 // POST /api/v1/notes/:id/pin
-router.post('/:id/pin', (req, res, next) => {
+router.post('/:id/pin', async (req, res, next) => {
   try {
-    const existing = db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const existing = await db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!existing) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Note not found' } });
     }
 
     const newPinned = existing.is_pinned ? 0 : 1;
     const now = new Date().toISOString();
-    db.prepare('UPDATE notes SET is_pinned = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+    await db.prepare('UPDATE notes SET is_pinned = ?, updated_at = ? WHERE id = ? AND user_id = ?')
       .run(newPinned, now, req.params.id, req.user.id);
 
-    const updated = db.prepare('SELECT * FROM notes WHERE id = ?').get(req.params.id);
+    const updated = await db.prepare('SELECT * FROM notes WHERE id = ?').get(req.params.id);
     res.json(formatNote(updated));
   } catch (err) {
     next(err);
@@ -126,19 +126,19 @@ router.post('/:id/pin', (req, res, next) => {
 });
 
 // POST /api/v1/notes/:id/archive
-router.post('/:id/archive', (req, res, next) => {
+router.post('/:id/archive', async (req, res, next) => {
   try {
-    const existing = db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const existing = await db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!existing) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Note not found' } });
     }
 
     const newArchived = existing.is_archived ? 0 : 1;
     const now = new Date().toISOString();
-    db.prepare('UPDATE notes SET is_archived = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+    await db.prepare('UPDATE notes SET is_archived = ?, updated_at = ? WHERE id = ? AND user_id = ?')
       .run(newArchived, now, req.params.id, req.user.id);
 
-    const updated = db.prepare('SELECT * FROM notes WHERE id = ?').get(req.params.id);
+    const updated = await db.prepare('SELECT * FROM notes WHERE id = ?').get(req.params.id);
     res.json(formatNote(updated));
   } catch (err) {
     next(err);
@@ -146,9 +146,9 @@ router.post('/:id/archive', (req, res, next) => {
 });
 
 // POST /api/v1/notes/:id/convert-to-task - Convert note into task without losing note!
-router.post('/:id/convert-to-task', (req, res, next) => {
+router.post('/:id/convert-to-task', async (req, res, next) => {
   try {
-    const note = db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const note = await db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!note) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Note not found' } });
     }
@@ -163,12 +163,12 @@ router.post('/:id/convert-to-task', (req, res, next) => {
     const taskId = randomUUID();
     const now = new Date().toISOString();
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO tasks (id, user_id, title, description, status, priority, due_at, created_at, updated_at)
       VALUES (?, ?, ?, ?, 'TODO', ?, ?, ?, ?)
     `).run(taskId, req.user.id, title, description, priority, dueAt, now, now);
 
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    const task = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
     res.status(201).json({
       task: {
         id: task.id,
@@ -188,9 +188,9 @@ router.post('/:id/convert-to-task', (req, res, next) => {
 });
 
 // DELETE /api/v1/notes/:id
-router.delete('/:id', (req, res, next) => {
+router.delete('/:id', async (req, res, next) => {
   try {
-    const result = db.prepare('DELETE FROM notes WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+    const result = await db.prepare('DELETE FROM notes WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
     if (result.changes === 0) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Note not found' } });
     }

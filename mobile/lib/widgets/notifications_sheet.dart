@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../models/notification_item.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import 'ui.dart';
 
 class NotificationsSheet extends StatefulWidget {
   const NotificationsSheet({super.key});
@@ -22,7 +23,6 @@ class _NotificationsSheetState extends State<NotificationsSheet> {
   }
 
   Future<void> _loadNotifications() async {
-    setState(() => _isLoading = true);
     final items = await ApiService().fetchNotifications();
     if (mounted) {
       setState(() {
@@ -37,122 +37,105 @@ class _NotificationsSheetState extends State<NotificationsSheet> {
     _loadNotifications();
   }
 
+  Future<void> _markAll() async {
+    await ApiService().markAllNotificationsRead();
+    _loadNotifications();
+  }
+
+  String _relative(DateTime d) {
+    final diff = DateTime.now().difference(d);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return DateFormat('MMM d').format(d);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.65,
-      padding: const EdgeInsets.all(18),
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-        border: Border(top: BorderSide(color: AppColors.border)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.notifications_none, size: 20, color: AppColors.primary),
-              const SizedBox(width: 8),
-              const Text(
-                'Notifications & Reminders',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.heading,
-                ),
-              ),
-              const Spacer(),
-              IconButton(
-                icon: const Icon(Icons.close, size: 20, color: AppColors.textMuted),
-                onPressed: () => Navigator.pop(context),
-              ),
-            ],
-          ),
-          const Divider(color: AppColors.border),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary))
-                : _notifications.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.notifications_off_outlined, size: 36, color: AppColors.textMuted.withValues(alpha: 0.5)),
-                            const SizedBox(height: 8),
-                            const Text('No new notifications', style: TextStyle(color: AppColors.textMuted, fontSize: 13)),
-                          ],
-                        ),
-                      )
-                    : ListView.separated(
-                        itemCount: _notifications.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 6),
-                        itemBuilder: (context, index) {
-                          final item = _notifications[index];
-                          DateTime? dt;
-                          try {
-                            dt = DateTime.parse(item.createdAt);
-                          } catch (_) {}
-                          final formatted = dt != null ? DateFormat('MMM d, h:mm a').format(dt) : item.createdAt;
+    final p = context.palette;
+    final unread = _notifications.where((n) => !n.isRead).length;
+    final now = DateTime.now();
+    final today = <NotificationItem>[];
+    final earlier = <NotificationItem>[];
+    for (final n in _notifications) {
+      final d = parseDate(n.createdAt);
+      (d != null && DateUtils.isSameDay(d, now) ? today : earlier).add(n);
+    }
 
-                          return Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: item.isRead ? AppColors.backgroundSecondary : AppColors.surface,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: item.isRead ? AppColors.border.withValues(alpha: 0.5) : AppColors.primary.withValues(alpha: 0.2),
-                              ),
-                            ),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Icon(
-                                  item.type == 'DUE_SOON' ? Icons.warning_amber_rounded : Icons.info_outline,
-                                  size: 16,
-                                  color: item.type == 'DUE_SOON' ? AppColors.danger : AppColors.primary,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        item.title,
-                                        style: TextStyle(
-                                          fontWeight: item.isRead ? FontWeight.w500 : FontWeight.w600,
-                                          fontSize: 13,
-                                          color: AppColors.heading,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        item.message,
-                                        style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        formatted,
-                                        style: const TextStyle(fontSize: 10, color: AppColors.textMuted),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                if (!item.isRead) ...[
-                                  IconButton(
-                                    icon: const Icon(Icons.check, size: 16, color: AppColors.primary),
-                                    onPressed: () => _markRead(item),
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints(),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          );
-                        },
-                      ),
+    Widget tile(NotificationItem item, int i) {
+      final d = parseDate(item.createdAt);
+      final (IconData icon, Color c) = switch (item.kind) {
+        'study' => (Icons.school_rounded, p.teal),
+        'review' => (Icons.wb_twilight_rounded, p.amber),
+        _ => (Icons.notifications_active_rounded, p.primary),
+      };
+      return TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: Duration(milliseconds: 260 + 30 * i.clamp(0, 10)),
+        curve: Motion.out,
+        builder: (context, v, child) => Opacity(opacity: v, child: Transform.translate(offset: Offset(0, 8 * (1 - v)), child: child)),
+        child: Pressable(
+          onTap: item.isRead ? null : () => _markRead(item),
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: item.isRead ? Colors.transparent : p.surface2,
+              borderRadius: BorderRadius.circular(Radii.md),
+              border: Border.all(color: item.isRead ? p.borderSubtle : p.border),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(color: item.isRead ? p.sunken : p.soft(c), borderRadius: BorderRadius.circular(11)),
+                child: Icon(icon, size: 18, color: item.isRead ? p.text3 : c),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Expanded(child: Text(item.title, style: AppType.card(p.text).copyWith(fontSize: 13.5, fontWeight: item.isRead ? FontWeight.w500 : FontWeight.w700))),
+                    if (d != null) Text(_relative(d), style: AppType.meta(p.text3)),
+                  ]),
+                  if (item.message.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(item.message, style: AppType.caption(p.text2).copyWith(height: 1.45)),
+                  ],
+                ]),
+              ),
+              if (!item.isRead) ...[
+                const SizedBox(width: 6),
+                Padding(padding: const EdgeInsets.only(top: 6), child: Container(width: 8, height: 8, decoration: BoxDecoration(color: p.primary, shape: BoxShape.circle))),
+              ],
+            ]),
           ),
-        ],
+        ),
+      );
+    }
+
+    return SizedBox(
+      height: MediaQuery.of(context).size.height * 0.75,
+      child: SheetScaffold(
+        expand: true,
+        title: 'Notifications',
+        subtitle: unread > 0 ? '$unread unread · tap one to mark it read' : 'Reminders, reviews and study nudges',
+        icon: Icons.notifications_rounded,
+        trailing: unread > 0 ? TextButton.icon(onPressed: _markAll, icon: const Icon(Icons.done_all_rounded, size: 18), label: const Text('Read all')) : null,
+        child: SizedBox(
+          child: _isLoading
+              ? const SkeletonList(rows: 4)
+              : _notifications.isEmpty
+                  ? Center(child: EmptyState(icon: Icons.notifications_off_outlined, title: 'All caught up', message: 'Reminders and daily reviews will show up here.'))
+                  : RefreshIndicator(
+                      onRefresh: _loadNotifications,
+                      child: ListView(padding: EdgeInsets.zero, children: [
+                        if (today.isNotEmpty) ...[SectionLabel('Today', count: today.length), ...today.asMap().entries.map((e) => tile(e.value, e.key))],
+                        if (earlier.isNotEmpty) ...[SectionLabel('Earlier'), ...earlier.asMap().entries.map((e) => tile(e.value, e.key + today.length))],
+                      ]),
+                    ),
+        ),
       ),
     );
   }

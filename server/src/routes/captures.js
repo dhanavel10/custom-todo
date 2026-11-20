@@ -25,7 +25,7 @@ router.post('/', async (req, res, next) => {
     const rawText = text.trim();
 
     // 1. Immediately save raw capture to database first!
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO captures (id, user_id, raw_text, input_mode, parse_status, created_at)
       VALUES (?, ?, ?, ?, 'NOT_PROCESSED', ?)
     `).run(captureId, req.user.id, rawText, inputMode, now);
@@ -35,7 +35,7 @@ router.post('/', async (req, res, next) => {
     const parsed = parseCapture(rawText, userTimeZone);
 
     // 3. Update capture record with parsed fields
-    db.prepare(`
+    await db.prepare(`
       UPDATE captures
       SET detected_type = ?,
           parsed_title = ?,
@@ -77,7 +77,7 @@ router.post('/', async (req, res, next) => {
       else finalPriority = 'LOW';
 
       const taskId = randomUUID();
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO tasks (
           id, user_id, capture_id, title, description, status, priority,
           category, urgency, importance, eisenhower_quadrant, is_deadline,
@@ -105,49 +105,51 @@ router.post('/', async (req, res, next) => {
         now
       );
 
-      db.prepare(`
+      await db.prepare(`
         UPDATE captures
         SET converted_entity_type = 'TASK',
             converted_entity_id = ?
         WHERE id = ?
       `).run(taskId, captureId);
 
-      const taskRow = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+      const taskRow = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
       createdTask = formatTask(taskRow);
     }
 
-    // Format response matching Section 6.3
+    const captureRow = await db.prepare('SELECT * FROM captures WHERE id = ?').get(captureId);
     res.status(201).json({
-      id: captureId,
-      rawText,
-      inputMode,
-      detectedType: parsed.detectedType,
-      suggestedTitle: parsed.suggestedTitle,
-      suggestedDueAt: parsed.suggestedDueAt,
-      isAmbiguous: parsed.isAmbiguous,
-      parseStatus: parsed.parseStatus,
-      createdTask,
-      createdAt: now
+      id: captureRow.id,
+      userId: captureRow.user_id,
+      rawText: captureRow.raw_text,
+      inputMode: captureRow.input_mode,
+      detectedType: captureRow.detected_type,
+      suggestedTitle: captureRow.parsed_title,
+      suggestedDueAt: captureRow.parsed_due_at,
+      parseStatus: captureRow.parse_status,
+      convertedEntityType: captureRow.converted_entity_type,
+      convertedEntityId: captureRow.converted_entity_id,
+      createdAt: captureRow.created_at,
+      createdTask
     });
   } catch (err) {
     next(err);
   }
 });
 
-// GET /api/v1/captures - List captures (unprocessed or all)
-router.get('/', (req, res, next) => {
+// GET /api/v1/captures - List captures
+router.get('/', async (req, res, next) => {
   try {
-    const { all } = req.query;
+    const { all = 'false' } = req.query;
     let query = 'SELECT * FROM captures WHERE user_id = ?';
-    if (!all || all === 'false') {
-      // Return captures that have not been converted yet
-      query += ' AND converted_entity_id IS NULL';
+    if (all !== 'true') {
+      query += " AND converted_entity_type IS NULL AND parse_status = 'NEEDS_REVIEW'";
     }
-    query += ' ORDER BY created_at DESC';
+    query += ' ORDER BY created_at DESC LIMIT 50';
 
-    const captures = db.prepare(query).all(req.user.id);
-    const formatted = captures.map(c => ({
+    const captures = await db.prepare(query).all(req.user.id);
+    res.json(captures.map((c) => ({
       id: c.id,
+      userId: c.user_id,
       rawText: c.raw_text,
       inputMode: c.input_mode,
       detectedType: c.detected_type,
@@ -157,23 +159,22 @@ router.get('/', (req, res, next) => {
       convertedEntityType: c.converted_entity_type,
       convertedEntityId: c.converted_entity_id,
       createdAt: c.created_at
-    }));
-
-    res.json(formatted);
+    })));
   } catch (err) {
     next(err);
   }
 });
 
 // GET /api/v1/captures/:id
-router.get('/:id', (req, res, next) => {
+router.get('/:id', async (req, res, next) => {
   try {
-    const capture = db.prepare('SELECT * FROM captures WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const capture = await db.prepare('SELECT * FROM captures WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!capture) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Capture not found' } });
     }
     res.json({
       id: capture.id,
+      userId: capture.user_id,
       rawText: capture.raw_text,
       inputMode: capture.input_mode,
       detectedType: capture.detected_type,
@@ -192,7 +193,7 @@ router.get('/:id', (req, res, next) => {
 // POST /api/v1/captures/:id/convert-to-task
 router.post('/:id/convert-to-task', async (req, res, next) => {
   try {
-    const capture = db.prepare('SELECT * FROM captures WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const capture = await db.prepare('SELECT * FROM captures WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!capture) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Capture not found' } });
     }
@@ -200,119 +201,99 @@ router.post('/:id/convert-to-task', async (req, res, next) => {
     const {
       title = capture.parsed_title || capture.raw_text,
       description = null,
+      dueAt = capture.parsed_due_at,
       priority = null,
-      dueAt = capture.parsed_due_at || null,
-      dueTimeZone = req.user.timeZone || 'Asia/Kolkata',
-      status = 'TODO'
+      category = 'General',
+      eisenhowerQuadrant = 'DO_FIRST'
     } = req.body;
-
-    const finalTitle = (title || capture.raw_text).trim();
-    const aiResult = await analyzeTaskWithAI({
-      title: finalTitle,
-      description: description || '',
-      deadline: dueAt,
-      userTimeZone: dueTimeZone
-    });
-
-    const finalCategory = aiResult.category || 'General';
-    const finalUrgency = aiResult.urgency || 'NOT_URGENT';
-    const finalImportance = aiResult.importance || 'NOT_IMPORTANT';
-    const finalQuadrant = aiResult.eisenhowerQuadrant || 'DO_FIRST';
-    const finalIsDeadline = aiResult.isDeadline ? 1 : 0;
-    const finalDueAt = dueAt || (aiResult.isDeadline && aiResult.resolvedDeadline ? aiResult.resolvedDeadline : null);
-
-    let finalPriority = priority;
-    if (!finalPriority) {
-      if (finalQuadrant === 'DO_FIRST') finalPriority = 'URGENT';
-      else if (finalQuadrant === 'SCHEDULE') finalPriority = 'HIGH';
-      else if (finalQuadrant === 'DELEGATE') finalPriority = 'MEDIUM';
-      else finalPriority = 'LOW';
-    }
 
     const taskId = randomUUID();
     const now = new Date().toISOString();
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO tasks (
         id, user_id, capture_id, title, description, status, priority,
-        category, urgency, importance, eisenhower_quadrant, is_deadline,
-        detected_dates, ai_analysis, due_at, due_time_zone, created_at, updated_at
+        category, eisenhower_quadrant, due_at, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, 'TODO', ?, ?, ?, ?, ?, ?)
     `).run(
       taskId,
       req.user.id,
       capture.id,
-      finalTitle,
+      title.trim(),
       description,
-      status,
-      finalPriority,
-      finalCategory,
-      finalUrgency,
-      finalImportance,
-      finalQuadrant,
-      finalIsDeadline,
-      JSON.stringify(aiResult.detectedDates || []),
-      JSON.stringify(aiResult.aiAnalysis || null),
-      finalDueAt,
-      dueTimeZone,
+      priority,
+      category,
+      eisenhowerQuadrant,
+      dueAt,
       now,
       now
     );
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE captures
       SET converted_entity_type = 'TASK',
           converted_entity_id = ?
       WHERE id = ?
     `).run(taskId, capture.id);
 
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    res.status(201).json(formatTask(task));
+    const createdTask = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    res.status(201).json(formatTask(createdTask));
   } catch (err) {
     next(err);
   }
 });
 
 // POST /api/v1/captures/:id/convert-to-note
-router.post('/:id/convert-to-note', (req, res, next) => {
+router.post('/:id/convert-to-note', async (req, res, next) => {
   try {
-    const capture = db.prepare('SELECT * FROM captures WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const capture = await db.prepare('SELECT * FROM captures WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!capture) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Capture not found' } });
     }
 
     const {
       title = capture.parsed_title || null,
-      content = capture.raw_text || ''
+      content = capture.raw_text,
+      isPinned = false
     } = req.body;
 
     const noteId = randomUUID();
     const now = new Date().toISOString();
 
-    db.prepare(`
-      INSERT INTO notes (id, user_id, capture_id, title, content, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(noteId, req.user.id, capture.id, title, content, now, now);
+    await db.prepare(`
+      INSERT INTO notes (id, user_id, capture_id, title, content, is_pinned, is_archived, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(noteId, req.user.id, capture.id, title, content, isPinned ? 1 : 0, now, now);
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE captures
       SET converted_entity_type = 'NOTE',
           converted_entity_id = ?
       WHERE id = ?
     `).run(noteId, capture.id);
 
-    const note = db.prepare('SELECT * FROM notes WHERE id = ?').get(noteId);
-    res.status(201).json(formatNote(note));
+    const note = await db.prepare('SELECT * FROM notes WHERE id = ?').get(noteId);
+    res.status(201).json({
+      id: note.id,
+      userId: note.user_id,
+      captureId: note.capture_id,
+      title: note.title,
+      content: note.content,
+      isPinned: Boolean(note.is_pinned),
+      isArchived: Boolean(note.is_archived),
+      createdAt: note.created_at,
+      updatedAt: note.updated_at
+    });
   } catch (err) {
     next(err);
   }
 });
 
 // DELETE /api/v1/captures/:id
-router.delete('/:id', (req, res, next) => {
+router.delete('/:id', async (req, res, next) => {
   try {
-    const result = db.prepare('DELETE FROM captures WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+    const result = await db.prepare('DELETE FROM captures WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
     if (result.changes === 0) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Capture not found' } });
     }
@@ -321,20 +302,5 @@ router.delete('/:id', (req, res, next) => {
     next(err);
   }
 });
-
-
-function formatNote(n) {
-  return {
-    id: n.id,
-    userId: n.user_id,
-    captureId: n.capture_id,
-    title: n.title,
-    content: n.content,
-    isPinned: Boolean(n.is_pinned),
-    isArchived: Boolean(n.is_archived),
-    createdAt: n.created_at,
-    updatedAt: n.updated_at
-  };
-}
 
 export default router;

@@ -1,6 +1,7 @@
-import { X, CheckCheck, Bell } from 'lucide-react';
-import { formatRelativeDate } from '../../lib/date';
+import { X, CheckCheck, Bell, BellRing, GraduationCap, Sunrise, BellOff } from 'lucide-react';
+import { formatRelativeDate, isSameDay } from '../../lib/date';
 import type { Notification } from '../../types';
+import { Button, Drawer, EmptyState, IconButton } from '../ui';
 
 interface NotificationDrawerProps {
   isOpen: boolean;
@@ -10,79 +11,88 @@ interface NotificationDrawerProps {
   onMarkAllRead: () => Promise<void>;
 }
 
-export const NotificationDrawer = ({
-  isOpen,
-  onClose,
-  notifications,
-  onMarkRead,
-  onMarkAllRead
-}: NotificationDrawerProps) => {
-  if (!isOpen) return null;
+/** Pick an icon/tone from the notification text (the API has no type field). */
+function toneOf(n: Notification) {
+  const text = `${n.title} ${n.body}`.toLowerCase();
+  if (/study|plan|session|concept/.test(text)) return { icon: GraduationCap, cls: 'tone-study' };
+  if (/morning|evening|review|briefing|wrap/.test(text)) return { icon: Sunrise, cls: 'tone-review' };
+  return { icon: BellRing, cls: '' };
+}
+
+export const NotificationDrawer = ({ isOpen, onClose, notifications, onMarkRead, onMarkAllRead }: NotificationDrawerProps) => {
+  const unread = notifications.filter((n) => !n.readAt);
+  const now = new Date();
+  const today = notifications.filter((n) => isSameDay(new Date(n.createdAt), now));
+  const earlier = notifications.filter((n) => !isSameDay(new Date(n.createdAt), now));
+
+  const item = (n: Notification, i: number) => {
+    const isUnread = !n.readAt;
+    const { icon: Icon, cls } = toneOf(n);
+    return (
+      <div
+        key={n.id}
+        className={`notif-item ${isUnread ? 'is-unread' : ''} ${cls}`}
+        onClick={() => isUnread && onMarkRead(n.id)}
+        role={isUnread ? 'button' : undefined}
+        tabIndex={isUnread ? 0 : undefined}
+        onKeyDown={(e) => isUnread && e.key === 'Enter' && onMarkRead(n.id)}
+        style={{ animationDelay: `${Math.min(i, 10) * 25}ms` }}
+        title={isUnread ? 'Mark as read' : undefined}
+      >
+        {isUnread && <span className="notif-unread-dot" />}
+        <span className="notif-icon">
+          <Icon />
+        </span>
+        <div className="notif-body">
+          <div className="notif-title">
+            <span>{n.title}</span>
+            <span className="notif-time">{formatRelativeDate(n.createdAt)}</span>
+          </div>
+          <div className="notif-text">{n.body}</div>
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div className="drawer">
-      <div className="drawer-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
-          <Bell size={16} /> Notifications
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {notifications.some((n) => !n.readAt) && (
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={onMarkAllRead}
-              title="Mark all notifications read"
-            >
-              <CheckCheck size={14} />
-            </button>
+    <Drawer
+      open={isOpen}
+      onClose={onClose}
+      label="Notifications"
+      header={
+        <>
+          <Bell size={17} />
+          <span className="t-section" style={{ flex: 1 }}>
+            Notifications
+          </span>
+          {unread.length > 0 && <span className="count primary">{unread.length} new</span>}
+          {unread.length > 0 && (
+            <Button size="sm" variant="ghost" icon={CheckCheck} onClick={onMarkAllRead}>
+              Mark all read
+            </Button>
           )}
-          <button className="btn btn-ghost btn-icon" onClick={onClose}>
-            <X size={16} />
-          </button>
-        </div>
-      </div>
-
-      <div className="drawer-body">
-        {notifications.length === 0 ? (
-          <div className="empty-state">
-            <Bell size={24} className="empty-state-icon" />
-            <div className="empty-state-title">No notifications</div>
-            <div className="empty-state-desc">You're all caught up!</div>
-          </div>
-        ) : (
-          notifications.map((n) => {
-            const isUnread = !n.readAt;
-            return (
-              <div
-                key={n.id}
-                style={{
-                  padding: '12px',
-                  borderRadius: 'var(--radius-sm)',
-                  backgroundColor: isUnread ? 'var(--bg-tertiary)' : 'transparent',
-                  border: '1px solid var(--border)',
-                  marginBottom: 8,
-                  cursor: isUnread ? 'pointer' : 'default',
-                  transition: 'var(--transition)'
-                }}
-                onClick={() => {
-                  if (isUnread) onMarkRead(n.id);
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                  <span style={{ fontSize: 13, fontWeight: isUnread ? 600 : 500, color: 'var(--text-primary)' }}>
-                    {n.title}
-                  </span>
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                    {formatRelativeDate(n.createdAt)}
-                  </span>
-                </div>
-                <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                  {n.body}
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-    </div>
+          <IconButton icon={X} label="Close" noTip onClick={onClose} />
+        </>
+      }
+    >
+      {notifications.length === 0 ? (
+        <EmptyState icon={BellOff} title="All caught up" description="Reminders, daily reviews and study nudges will appear here." />
+      ) : (
+        <>
+          {today.length > 0 && (
+            <>
+              <div className="notif-group-label t-eyebrow">Today</div>
+              {today.map(item)}
+            </>
+          )}
+          {earlier.length > 0 && (
+            <>
+              <div className="notif-group-label t-eyebrow">Earlier</div>
+              {earlier.map((n, i) => item(n, i + today.length))}
+            </>
+          )}
+        </>
+      )}
+    </Drawer>
   );
 };

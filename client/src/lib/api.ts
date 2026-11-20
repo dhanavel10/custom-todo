@@ -1,8 +1,35 @@
-import type { User, UserPreferences, Capture, Task, Note, Reminder, Notification } from '../types';
+import type { User, UserPreferences, PreferencesUpdate, Capture, Task, Note, Reminder, Notification, Plan, PlanSummary, MissedPlanItem, PlanItem, NewPlanItem } from '../types';
 
 const BASE_URL = '/api/v1';
 
 let authToken: string | null = localStorage.getItem('auth_token');
+
+export function getTokenExpiration(token: string | null): number | null {
+  if (!token) return null;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const base64Url = parts[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    const payload = JSON.parse(jsonPayload);
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isTokenExpired(token: string | null): boolean {
+  if (!token) return true;
+  const exp = getTokenExpiration(token);
+  if (!exp) return false;
+  return Date.now() >= exp;
+}
 
 export function setAuthToken(token: string | null) {
   authToken = token;
@@ -14,14 +41,19 @@ export function setAuthToken(token: string | null) {
 }
 
 export function getAuthToken() {
+  if (authToken && isTokenExpired(authToken)) {
+    setAuthToken(null);
+    return null;
+  }
   return authToken;
 }
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const currentToken = getAuthToken();
   const headers = new Headers(options.headers || {});
   headers.set('Content-Type', 'application/json');
-  if (authToken) {
-    headers.set('Authorization', `Bearer ${authToken}`);
+  if (currentToken) {
+    headers.set('Authorization', `Bearer ${currentToken}`);
   }
 
   const response = await fetch(`${BASE_URL}${endpoint}`, {
@@ -32,6 +64,17 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
   if (response.status === 204) {
     return {} as T;
+  }
+
+  if (response.status === 401) {
+    setAuthToken(null);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('auth:expired', {
+          detail: { message: 'Your 7-day session has expired. Please sign in again.' }
+        })
+      );
+    }
   }
 
   const data = await response.json().catch(() => ({}));
@@ -50,12 +93,19 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 export const api = {
   // Auth
   auth: {
-    register: (body: { email: string; password: string; displayName?: string; timeZone?: string }) =>
+    getConfig: () =>
+      request<{ googleClientId: string }>('/auth/config'),
+    google: (credential: string) =>
+      request<{ user: User; token: string }>('/auth/google', {
+        method: 'POST',
+        body: JSON.stringify({ credential })
+      }),
+    register: (body: { email: string; username?: string; password: string; displayName?: string; timeZone?: string }) =>
       request<{ user: User; token: string }>('/auth/register', {
         method: 'POST',
         body: JSON.stringify(body)
       }),
-    login: (body: { email: string; password: string }) =>
+    login: (body: { identifier?: string; email?: string; username?: string; password: string }) =>
       request<{ user: User; token: string }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify(body)
@@ -67,14 +117,24 @@ export const api = {
   },
 
   // User Profile & Preferences
+  // NOTE: the server mounts its user router at /api/v1/me and declares routes as /me/..., so the
+  // live endpoints are /api/v1/me/me/... (calling /api/v1/me/... returns 404).
   user: {
-    getMe: () => request<{ user: User; preferences: UserPreferences }>('/me'),
+    getMe: () => request<{ user: User; preferences: UserPreferences }>('/me/me'),
     updateMe: (body: Partial<User>) =>
-      request<{ user: User }>('/me', { method: 'PATCH', body: JSON.stringify(body) }),
-    getPreferences: () => request<UserPreferences>('/me/preferences'),
-    updatePreferences: (body: Partial<UserPreferences>) =>
-      request<UserPreferences>('/me/preferences', { method: 'PATCH', body: JSON.stringify(body) }),
-    getExportUrl: () => `${BASE_URL}/me/export`
+      request<{ user: User }>('/me/me', { method: 'PATCH', body: JSON.stringify(body) }),
+    getPreferences: () => request<UserPreferences>('/me/me/preferences'),
+    updatePreferences: (body: PreferencesUpdate) =>
+      request<UserPreferences>('/me/me/preferences', { method: 'PATCH', body: JSON.stringify(body) }),
+    getExportUrl: () => `${BASE_URL}/me/me/export`,
+    /** Downloads the full JSON backup using the current auth token. */
+    exportData: async (): Promise<Blob> => {
+      const headers: Record<string, string> = {};
+      if (authToken) headers.Authorization = `Bearer ${authToken}`;
+      const res = await fetch(`${BASE_URL}/me/me/export`, { headers, credentials: 'include' });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      return res.blob();
+    }
   },
 
   // Captures
@@ -182,5 +242,22 @@ export const api = {
       request<Notification>(`/notifications/${id}/read`, { method: 'POST' }),
     markAllRead: () =>
       request<{ message: string }>('/notifications/read-all', { method: 'POST' })
+  },
+
+  // Study / planned schedules
+  plans: {
+    list: () => request<PlanSummary[]>('/plans'),
+    get: (id: string) => request<Plan>(`/plans/${id}`),
+    missed: () => request<MissedPlanItem[]>('/plans/items/missed'),
+    create: (body: { title: string; description?: string; items: NewPlanItem[] }) =>
+      request<PlanSummary>('/plans', { method: 'POST', body: JSON.stringify(body) }),
+    delete: (id: string) => request<void>(`/plans/${id}`, { method: 'DELETE' }),
+    toggleItem: (itemId: string) =>
+      request<PlanItem>(`/plans/items/${itemId}/complete`, { method: 'POST' }),
+    rescheduleItem: (itemId: string, scheduledAt: string) =>
+      request<PlanItem>(`/plans/items/${itemId}/reschedule`, {
+        method: 'POST',
+        body: JSON.stringify({ scheduledAt })
+      })
   }
 };

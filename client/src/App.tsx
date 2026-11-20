@@ -1,46 +1,65 @@
-import { useState, useEffect } from 'react';
-import {
-  Inbox,
-  Calendar,
-  Clock,
-  CheckSquare,
-  BookOpen,
-  AlertTriangle,
-  Bell,
-  Settings as SettingsIcon,
-  Search,
-  Plus,
-  Trash2,
-  Sparkles,
-  FileText,
-  User,
-  LogOut,
-  Moon,
-  Sun,
-  LayoutGrid,
-  CalendarDays
-} from 'lucide-react';
-import { api, getAuthToken, setAuthToken } from './lib/api';
-import { formatDate } from './lib/date';
-import { QuickCapture } from './components/QuickCapture/QuickCapture';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Sparkles } from 'lucide-react';
+import { api, getAuthToken, setAuthToken, isTokenExpired } from './lib/api';
+import { NAV_BY_VIEW, type ViewMode } from './lib/nav';
+import { Sidebar } from './components/Shell/Sidebar';
+import { Topbar } from './components/Shell/Topbar';
+import { CommandPalette } from './components/QuickCapture/CommandPalette';
 import { DayPlanner } from './components/DayPlanner/DayPlanner';
-import { TaskItem } from './components/TaskItem/TaskItem';
 import { TaskEditorModal } from './components/TaskEditor/TaskEditorModal';
 import { EisenhowerMatrix } from './components/EisenhowerMatrix/EisenhowerMatrix';
 import { NoteEditor } from './components/NoteEditor/NoteEditor';
 import { ReminderPickerModal } from './components/ReminderPicker/ReminderPickerModal';
 import { NotificationDrawer } from './components/Notifications/NotificationDrawer';
-import { SettingsModal } from './components/Settings/SettingsModal';
+import { PlansView } from './components/Plans/PlansView';
+import { PlanDetail } from './components/Plans/PlanDetail';
+import { RescheduleModal } from './components/Plans/RescheduleModal';
+import { SettingsModal, type ThemePref } from './components/Settings/SettingsModal';
 import { AuthModal } from './components/Auth/AuthModal';
-import type { Task, Capture, Note, Notification, User as UserType, UserPreferences, EisenhowerQuadrant, AIStatus } from './types';
+import { TaskListSkeleton, useConfirm, useToast } from './components/ui';
+import { TodayView } from './views/TodayView';
+import { InboxView } from './views/InboxView';
+import { UpcomingView } from './views/UpcomingView';
+import { AllTasksView } from './views/AllTasksView';
+import { OverdueView } from './views/OverdueView';
+import { NotesView } from './views/NotesView';
+import type { TaskActions } from './views/types';
+import { isSameDay } from './lib/date';
+import type { Task, Capture, Note, Notification, User as UserType, UserPreferences, EisenhowerQuadrant, AIStatus, Plan, PlanSummary, MissedPlanItem, PlanItem, NewPlanItem, PreferencesUpdate } from './types';
 
-type ViewMode = 'matrix' | 'planner' | 'today' | 'inbox' | 'upcoming' | 'all' | 'notes' | 'overdue';
+const VIEW_KEY = 'pi.view';
+const SIDEBAR_KEY = 'pi.sidebarCollapsed';
+
+const readStorage = (k: string) => {
+  try {
+    return localStorage.getItem(k);
+  } catch {
+    return null;
+  }
+};
+const writeStorage = (k: string, v: string) => {
+  try {
+    localStorage.setItem(k, v);
+  } catch {
+    /* storage unavailable */
+  }
+};
+
+const systemDark = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches;
 
 export function App() {
+  const toast = useToast();
+  const confirm = useConfirm();
+
   const [currentUser, setCurrentUser] = useState<UserType | null>(null);
   const [preferences, setPreferences] = useState<UserPreferences | null>(null);
-  const [currentView, setCurrentView] = useState<ViewMode>('matrix');
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [currentView, setCurrentView] = useState<ViewMode>(() => {
+    const v = readStorage(VIEW_KEY) as ViewMode | null;
+    return v && v in NAV_BY_VIEW ? v : 'matrix';
+  });
+  const [themePref, setThemePref] = useState<ThemePref>(() => (readStorage('theme') as ThemePref | null) || 'light');
+  const [systemIsDark, setSystemIsDark] = useState(systemDark);
+  const theme: 'light' | 'dark' = themePref === 'system' ? (systemIsDark ? 'dark' : 'light') : themePref;
 
   // Entities
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -49,6 +68,13 @@ export function App() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadNotifCount, setUnreadNotifCount] = useState<number>(0);
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
+  const [plans, setPlans] = useState<PlanSummary[]>([]);
+  const [missedItems, setMissedItems] = useState<MissedPlanItem[]>([]);
+  const [openPlanId, setOpenPlanId] = useState<string | null>(null);
+  const [openPlan, setOpenPlan] = useState<Plan | null>(null);
+  const [rescheduleItems, setRescheduleItems] = useState<MissedPlanItem[] | null>(null);
+  const [dismissedMissed, setDismissedMissed] = useState<Set<string>>(new Set());
+  const [loaded, setLoaded] = useState(false);
 
   // UI state
   const [searchQuery, setSearchQuery] = useState('');
@@ -60,157 +86,310 @@ export function App() {
   const [isNotifDrawerOpen, setIsNotifDrawerOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStorage(SIDEBAR_KEY) === '1');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const lastUnread = useRef<number | null>(null);
 
-  // Initialize theme
+  /* ---------------- Theme ---------------- */
   useEffect(() => {
-    const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null;
-    const initialTheme = savedTheme || 'light';
-    setTheme(initialTheme);
-    document.documentElement.setAttribute('data-theme', initialTheme);
+    const mq = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!mq) return;
+    const onChange = () => setSystemIsDark(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  const toggleTheme = () => {
-    const next = theme === 'light' ? 'dark' : 'light';
-    setTheme(next);
-    localStorage.setItem('theme', next);
-    document.documentElement.setAttribute('data-theme', next);
-  };
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.add('theme-transition');
+    root.setAttribute('data-theme', theme);
+    const t = setTimeout(() => root.classList.remove('theme-transition'), 320);
+    return () => clearTimeout(t);
+  }, [theme]);
 
-  // Check auth & bootstrap
+  const chooseTheme = (t: ThemePref) => {
+    setThemePref(t);
+    writeStorage('theme', t);
+  };
+  const toggleTheme = () => chooseTheme(theme === 'light' ? 'dark' : 'light');
+
+  /* ---------------- Navigation ---------------- */
+  const navigate = useCallback((v: ViewMode) => {
+    setCurrentView(v);
+    writeStorage(VIEW_KEY, v);
+    setMobileNavOpen(false);
+    setActiveNote(null);
+    if (v === 'plans') {
+      setOpenPlanId(null);
+      setOpenPlan(null);
+    }
+  }, []);
+
+  const toggleSidebar = () =>
+    setSidebarCollapsed((c) => {
+      writeStorage(SIDEBAR_KEY, c ? '0' : '1');
+      return !c;
+    });
+
+  // Global shortcuts: Ctrl/Cmd+K → command palette
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  /* ---------------- Auth & data ---------------- */
   useEffect(() => {
     bootstrapAuth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const handleAuthExpired = (e: Event) => {
+      setAuthToken(null);
+      setCurrentUser(null);
+      setPreferences(null);
+      setTasks([]);
+      setCaptures([]);
+      setNotes([]);
+      setNotifications([]);
+      setPlans([]);
+      setLoaded(true);
+      setIsAuthOpen(true);
+      const customMsg = (e as CustomEvent)?.detail?.message || 'Your 7-day session has expired. Please sign in again.';
+      toast({ kind: 'info', title: 'Session Expired', description: customMsg });
+    };
+
+    window.addEventListener('auth:expired', handleAuthExpired);
+    return () => window.removeEventListener('auth:expired', handleAuthExpired);
+  }, [toast]);
 
   const bootstrapAuth = async () => {
     try {
       const token = getAuthToken();
-      if (!token) {
-        // Create or login default demo user for effortless zero-friction testing
-        try {
-          const res = await api.auth.login({ email: 'demo@personal.local', password: 'demo_password_123' });
-          setAuthToken(res.token);
-          setCurrentUser(res.user);
-        } catch {
-          const res = await api.auth.register({
-            email: 'demo@personal.local',
-            password: 'demo_password_123',
-            displayName: 'Personal User'
-          });
-          setAuthToken(res.token);
-          setCurrentUser(res.user);
-        }
+      if (!token || isTokenExpired(token)) {
+        setAuthToken(null);
+        setCurrentUser(null);
+        setLoaded(true);
+        setIsAuthOpen(true);
+        return;
       }
-
       const me = await api.auth.me();
       setCurrentUser(me.user);
       setPreferences(me.preferences);
       await loadAllData();
     } catch (err) {
-      console.error('Failed auth bootstrap:', err);
+      console.warn('Session expired or authentication required:', err);
+      setAuthToken(null);
+      setCurrentUser(null);
+      setLoaded(true);
       setIsAuthOpen(true);
     }
   };
 
   const loadAllData = async () => {
     try {
-      const [tList, cList, nList, notifRes, ai] = await Promise.all([
+      const [tList, cList, nList, notifRes, ai, planList] = await Promise.all([
         api.tasks.list(),
         api.captures.list(),
         api.notes.list(),
         api.notifications.list(),
-        api.tasks.getAIStatus().catch(() => null)
+        api.tasks.getAIStatus().catch(() => null),
+        api.plans.list().catch(() => [] as PlanSummary[])
       ]);
+      setPlans(planList);
+      api.plans.missed().then(setMissedItems).catch(() => {});
       setTasks(tList);
       setCaptures(cList);
       setNotes(nList);
       setNotifications(notifRes.notifications);
       setUnreadNotifCount(notifRes.unreadCount);
+      lastUnread.current = notifRes.unreadCount;
       if (ai) setAiStatus(ai);
     } catch (err) {
       console.error('Failed loading data:', err);
+      toast({ kind: 'error', title: "Couldn't load your data", description: 'Check that the server is running, then refresh.' });
+    } finally {
+      setLoaded(true);
     }
   };
 
   // Periodic notifications check
   useEffect(() => {
     const interval = setInterval(async () => {
-      if (currentUser) {
-        try {
-          const res = await api.notifications.list();
-          setNotifications(res.notifications);
-          setUnreadNotifCount(res.unreadCount);
-        } catch {}
+      if (!currentUser) return;
+      try {
+        const res = await api.notifications.list();
+        setNotifications(res.notifications);
+        setUnreadNotifCount(res.unreadCount);
+        // Surface brand-new reminders as a toast
+        if (lastUnread.current !== null && res.unreadCount > lastUnread.current) {
+          const newest = res.notifications.find((n) => !n.readAt);
+          if (newest) toast({ kind: 'reminder', title: newest.title, description: newest.body, action: { label: 'View', onClick: () => setIsNotifDrawerOpen(true) } });
+        }
+        lastUnread.current = res.unreadCount;
+        await refreshPlans();
+      } catch {
+        /* offline — try again next tick */
       }
     }, 12000);
     return () => clearInterval(interval);
-  }, [currentUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser, openPlanId]);
 
-  // Task Actions
-  const handleToggleComplete = async (task: Task) => {
+  /* ---------------- Study plans ---------------- */
+  const planTitles = Object.fromEntries(plans.map((p) => [p.id, p.title]));
+
+  const refreshPlans = async () => {
+    const [list, missed] = await Promise.all([api.plans.list(), api.plans.missed()]);
+    setPlans(list);
+    setMissedItems(missed);
+    if (openPlanId) api.plans.get(openPlanId).then(setOpenPlan).catch(() => {});
+  };
+
+  const handleOpenPlan = async (id: string) => {
+    setOpenPlanId(id);
+    setOpenPlan(null);
     try {
-      const updated = await api.tasks.complete(task.id);
-      setTasks((prev) => prev.map((t) => (t.id === task.id ? updated : t)));
+      setOpenPlan(await api.plans.get(id));
+    } catch (err) {
+      console.error('Failed to load plan:', err);
+      toast({ kind: 'error', title: 'Could not open that plan' });
+      setOpenPlanId(null);
+    }
+  };
+
+  // Automatically ask for a new time whenever there are missed items we haven't prompted for yet
+  useEffect(() => {
+    if (rescheduleItems) return;
+    const fresh = missedItems.filter((i) => !dismissedMissed.has(i.id));
+    if (fresh.length > 0) setRescheduleItems(fresh);
+  }, [missedItems, rescheduleItems, dismissedMissed]);
+
+  const handleCreatePlan = async (body: { title: string; description?: string; items: NewPlanItem[] }) => {
+    await api.plans.create(body);
+    await refreshPlans();
+    toast({ title: 'Study plan created', description: `${body.items.length} concepts scheduled.` });
+  };
+
+  const handleDeletePlan = async (id: string) => {
+    try {
+      await api.plans.delete(id);
+      await refreshPlans();
+      setRescheduleItems((prev) => {
+        const rest = prev ? prev.filter((i) => i.planId !== id) : [];
+        return rest.length ? rest : null;
+      });
+      toast({ kind: 'info', title: 'Plan deleted' });
+    } catch {
+      toast({ kind: 'error', title: 'Could not delete plan' });
+    }
+  };
+
+  const handleTogglePlanItem = async (item: PlanItem) => {
+    try {
+      await api.plans.toggleItem(item.id);
+      await refreshPlans();
+    } catch (err) {
+      console.error('Failed to update plan item:', err);
+      toast({ kind: 'error', title: 'Could not update that session' });
+    }
+  };
+
+  const handleReschedulePlanItem = async (itemId: string, scheduledAtIso: string) => {
+    await api.plans.rescheduleItem(itemId, scheduledAtIso);
+    await refreshPlans();
+    setRescheduleItems((prev) => {
+      const rest = prev ? prev.filter((i) => i.id !== itemId) : [];
+      return rest.length ? rest : null;
+    });
+    toast({ title: 'Session rescheduled', description: new Date(scheduledAtIso).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) });
+  };
+
+  const closeRescheduleModal = () => {
+    setDismissedMissed((prev) => {
+      const next = new Set(prev);
+      (rescheduleItems || []).forEach((i) => next.add(i.id));
+      return next;
+    });
+    setRescheduleItems(null);
+  };
+
+  /* ---------------- Tasks ---------------- */
+  const replaceTask = (updated: Task) => setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+
+  const handleToggleComplete = async (task: Task) => {
+    // Optimistic: flip status immediately, reconcile with server response
+    const optimistic: Task = { ...task, status: task.status === 'COMPLETED' ? 'TODO' : 'COMPLETED' };
+    replaceTask(optimistic);
+    try {
+      replaceTask(await api.tasks.complete(task.id));
     } catch (err) {
       console.error('Failed to complete task:', err);
+      replaceTask(task);
+      toast({ kind: 'error', title: 'Could not update task' });
     }
   };
 
   const handleSaveTaskUpdates = async (updates: Partial<Task>) => {
     try {
       if (modalTask && modalTask.id) {
-        const updated = await api.tasks.update(modalTask.id, updates);
-        setTasks((prev) => prev.map((t) => (t.id === modalTask.id ? updated : t)));
+        replaceTask(await api.tasks.update(modalTask.id, updates));
+        toast({ title: 'Task updated' });
       } else {
         const created = await api.tasks.create(updates);
         setTasks((prev) => [created, ...prev]);
+        toast({ title: 'Task created', description: created.title });
       }
       setIsTaskModalOpen(false);
       setModalTask(null);
     } catch (err) {
       console.error('Failed to save task:', err);
-      alert('Failed to save task');
+      toast({ kind: 'error', title: 'Failed to save task', description: err instanceof Error ? err.message : undefined });
     }
   };
 
   const handleMoveQuadrant = async (taskId: string, quadrant: EisenhowerQuadrant) => {
+    const before = tasks.find((t) => t.id === taskId);
+    if (before) replaceTask({ ...before, eisenhowerQuadrant: quadrant });
     try {
-      const updated = await api.tasks.moveToQuadrant(taskId, quadrant);
-      setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));
+      replaceTask(await api.tasks.moveToQuadrant(taskId, quadrant));
     } catch (err) {
       console.error('Failed to move quadrant:', err);
+      if (before) replaceTask(before);
+      toast({ kind: 'error', title: 'Could not move task' });
     }
   };
 
   const handleReanalyzeTask = async (taskId: string) => {
     try {
       const updated = await api.tasks.reanalyze(taskId);
-      setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));
-    } catch (err) {
-      alert('Failed to re-analyze task');
+      replaceTask(updated);
+      toast({ kind: 'info', title: 'Re-analyzed', description: updated.aiAnalysis?.reasoning?.slice(0, 120) });
+    } catch {
+      toast({ kind: 'error', title: 'Failed to re-analyze task', description: 'The AI service may be offline.' });
     }
   };
 
   const handleQuickAdd = (quadrant?: EisenhowerQuadrant) => {
-    setModalTask({
-      title: '',
-      description: '',
-      eisenhowerQuadrant: quadrant || undefined,
-      status: 'TODO'
-    });
+    setModalTask({ title: '', description: '', eisenhowerQuadrant: quadrant || undefined, status: 'TODO' });
     setIsTaskModalOpen(true);
   };
 
   const handleInlineCreateTask = async (title: string, quadrant: EisenhowerQuadrant) => {
     try {
-      const created = await api.tasks.create({
-        title,
-        eisenhowerQuadrant: quadrant,
-        status: 'TODO'
-      });
+      const created = await api.tasks.create({ title, eisenhowerQuadrant: quadrant, status: 'TODO' });
       setTasks((prev) => [created, ...prev]);
       return created;
     } catch (err) {
       console.error('Failed to quick add task to matrix:', err);
+      toast({ kind: 'error', title: 'Could not add task' });
     }
   };
 
@@ -220,12 +399,16 @@ export function App() {
   };
 
   const handleDeleteTask = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this task?')) return;
+    const task = tasks.find((t) => t.id === id);
+    const ok = await confirm({ title: 'Delete this task?', message: task ? `“${task.title}” will be permanently removed.` : undefined, confirmLabel: 'Delete', danger: true });
+    if (!ok) return;
     try {
       await api.tasks.delete(id);
       setTasks((prev) => prev.filter((t) => t.id !== id));
+      toast({ kind: 'info', title: 'Task deleted' });
     } catch (err) {
       console.error('Failed to delete task:', err);
+      toast({ kind: 'error', title: 'Could not delete task' });
     }
   };
 
@@ -233,73 +416,75 @@ export function App() {
     try {
       const current = task.dueAt ? new Date(task.dueAt) : new Date();
       current.setDate(current.getDate() + 1);
-      const updated = await api.tasks.update(task.id, { dueAt: current.toISOString() });
-      setTasks((prev) => prev.map((t) => (t.id === task.id ? updated : t)));
+      replaceTask(await api.tasks.update(task.id, { dueAt: current.toISOString() }));
+      toast({ kind: 'info', title: 'Snoozed until tomorrow' });
     } catch (err) {
       console.error('Failed to snooze task:', err);
+      toast({ kind: 'error', title: 'Could not snooze task' });
     }
   };
 
   const handleSetReminder = async (taskId: string, remindAtIso: string) => {
     try {
       await api.tasks.addReminder(taskId, remindAtIso);
-      alert('Reminder scheduled!');
-    } catch (err) {
-      alert('Failed to set reminder');
+      toast({ kind: 'reminder', title: 'Reminder scheduled', description: new Date(remindAtIso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) });
+    } catch {
+      toast({ kind: 'error', title: 'Failed to set reminder' });
     }
   };
 
   const handleUpdateTaskDate = async (taskId: string, dateIso: string | null) => {
+    const before = tasks.find((t) => t.id === taskId);
+    if (before) replaceTask({ ...before, dueAt: dateIso });
     try {
-      const updated = await api.tasks.update(taskId, { dueAt: dateIso });
-      setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));
+      replaceTask(await api.tasks.update(taskId, { dueAt: dateIso }));
     } catch (err) {
       console.error('Failed to update task date:', err);
+      if (before) replaceTask(before);
+      toast({ kind: 'error', title: 'Could not reschedule task' });
     }
+  };
+
+  const handleRescheduleTask = (taskId: string, iso: string | null) => {
+    void handleUpdateTaskDate(taskId, iso).then(() =>
+      toast({ kind: 'info', title: iso ? 'Rescheduled' : 'Date removed', description: iso ? new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : undefined })
+    );
   };
 
   const handleQuickCreateTaskForDay = async (title: string, dateIso: string) => {
     try {
-      const created = await api.tasks.create({
-        title,
-        dueAt: dateIso,
-        status: 'TODO'
-      });
+      const created = await api.tasks.create({ title, dueAt: dateIso, status: 'TODO' });
       setTasks((prev) => [created, ...prev]);
     } catch (err) {
       console.error('Failed to create task for day:', err);
+      toast({ kind: 'error', title: 'Could not create task' });
     }
   };
 
-  // Capture Actions
-  const handleCaptureSaved = (capture: Capture) => {
-    setCaptures((prev) => [capture, ...prev]);
-  };
+  /* ---------------- Captures ---------------- */
+  const handleCaptureSaved = useCallback((capture: Capture) => setCaptures((prev) => [capture, ...prev]), []);
+  const handleTaskCreated = useCallback((task: Task) => setTasks((prev) => [task, ...prev.filter((t) => t.id !== task.id)]), []);
+  const handleCaptureConverted = useCallback((id: string) => setCaptures((prev) => prev.filter((c) => c.id !== id)), []);
 
   const handleConvertCaptureToTask = async (capture: Capture) => {
     try {
-      const task = await api.captures.convertToTask(capture.id, {
-        title: capture.suggestedTitle || capture.rawText,
-        dueAt: capture.suggestedDueAt || undefined
-      });
+      const task = await api.captures.convertToTask(capture.id, { title: capture.suggestedTitle || capture.rawText, dueAt: capture.suggestedDueAt || undefined });
       setTasks((prev) => [task, ...prev]);
       setCaptures((prev) => prev.filter((c) => c.id !== capture.id));
-    } catch (err) {
-      alert('Failed to convert to task');
+      toast({ title: 'Converted to task', description: task.title, action: { label: 'Open', onClick: () => handleOpenEdit(task) } });
+    } catch {
+      toast({ kind: 'error', title: 'Failed to convert to task' });
     }
   };
 
   const handleConvertCaptureToNote = async (capture: Capture) => {
     try {
-      const note = await api.captures.convertToNote(capture.id, {
-        title: capture.suggestedTitle || null,
-        content: capture.rawText
-      });
+      const note = await api.captures.convertToNote(capture.id, { title: capture.suggestedTitle || null, content: capture.rawText });
       setNotes((prev) => [note, ...prev]);
       setCaptures((prev) => prev.filter((c) => c.id !== capture.id));
-      setActiveNote(note);
-    } catch (err) {
-      alert('Failed to convert to note');
+      toast({ title: 'Saved as a note', action: { label: 'Open', onClick: () => { navigate('notes'); setActiveNote(note); } } });
+    } catch {
+      toast({ kind: 'error', title: 'Failed to convert to note' });
     }
   };
 
@@ -309,527 +494,238 @@ export function App() {
       setCaptures((prev) => prev.filter((c) => c.id !== id));
     } catch (err) {
       console.error('Failed to delete capture:', err);
+      toast({ kind: 'error', title: 'Could not delete capture' });
     }
   };
 
-  // Note Actions
+  /* ---------------- Notes ---------------- */
   const handleCreateNewNote = async () => {
     try {
       const newNote = await api.notes.create({ title: '', content: '' });
       setNotes((prev) => [newNote, ...prev]);
+      navigate('notes');
       setActiveNote(newNote);
-    } catch (err) {
-      alert('Failed to create new note');
+    } catch {
+      toast({ kind: 'error', title: 'Failed to create note' });
     }
   };
 
-  const handleUpdateNote = (updated: Note) => {
-    setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
-    if (activeNote?.id === updated.id) {
-      setActiveNote(updated);
-    }
-  };
+  // Upsert so restoring an archived note brings it back into the list
+  const handleUpdateNote = useCallback((updated: Note) => {
+    setNotes((prev) => (prev.some((n) => n.id === updated.id) ? prev.map((n) => (n.id === updated.id ? updated : n)) : [updated, ...prev]));
+    setActiveNote((cur) => (cur?.id === updated.id ? updated : cur));
+  }, []);
 
   const handleDeleteNote = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this note?')) return;
+    const ok = await confirm({ title: 'Delete this note?', message: 'This cannot be undone. Archive it instead if you might need it later.', confirmLabel: 'Delete note', danger: true });
+    if (!ok) return;
     try {
       await api.notes.delete(id);
       setNotes((prev) => prev.filter((n) => n.id !== id));
       if (activeNote?.id === id) setActiveNote(null);
+      toast({ kind: 'info', title: 'Note deleted' });
     } catch (err) {
       console.error('Failed to delete note:', err);
+      toast({ kind: 'error', title: 'Could not delete note' });
     }
   };
 
-  // Filter tasks based on view and search
-  const filteredTasks = tasks.filter((t) => {
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchTitle = t.title.toLowerCase().includes(q);
-      const matchDesc = t.description?.toLowerCase().includes(q) ?? false;
-      if (!matchTitle && !matchDesc) return false;
-    }
+  /* ---------------- Derived ---------------- */
+  const searchedTasks = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return tasks;
+    return tasks.filter((t) => t.title.toLowerCase().includes(q) || (t.description?.toLowerCase().includes(q) ?? false) || (t.category?.toLowerCase().includes(q) ?? false));
+  }, [tasks, searchQuery]);
 
+  const counts = useMemo(() => {
     const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
-    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
-    const dueTime = t.dueAt ? new Date(t.dueAt).getTime() : null;
+    const open = tasks.filter((t) => t.status !== 'COMPLETED' && t.status !== 'ARCHIVED' && t.dueAt);
+    const endToday = new Date(now);
+    endToday.setHours(23, 59, 59, 999);
+    return {
+      today: open.filter((t) => isSameDay(new Date(t.dueAt!), now)).length,
+      overdue: open.filter((t) => new Date(t.dueAt!).getTime() < now.getTime()).length,
+      upcoming: open.filter((t) => new Date(t.dueAt!).getTime() > endToday.getTime()).length,
+      inbox: captures.length,
+      notes: notes.filter((n) => !n.isArchived).length,
+      missed: missedItems.length
+    };
+    // re-evaluate as notifications poll ticks so "overdue" stays fresh
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, captures, notes, missedItems, notifications]);
 
-    if (currentView === 'today') {
-      if (t.status === 'ARCHIVED') return false;
-      return dueTime !== null && dueTime >= startOfToday && dueTime <= endOfToday;
+  const categories = useMemo(() => Array.from(new Set(tasks.map((t) => t.category).filter(Boolean) as string[])).sort(), [tasks]);
+
+  const actions: TaskActions = {
+    onToggleComplete: handleToggleComplete,
+    onEdit: handleOpenEdit,
+    onDelete: handleDeleteTask,
+    onAddReminder: setReminderTask,
+    onSnooze: handleSnooze,
+    onReschedule: handleRescheduleTask
+  };
+
+  const nav = NAV_BY_VIEW[currentView];
+  const pageTitle = currentView === 'plans' && openPlanId ? openPlan?.title || 'Study plan' : nav.title;
+  const showSearch = currentView !== 'plans' && !(currentView === 'notes' && activeNote);
+  const layout = currentView === 'matrix' || (currentView === 'notes' && activeNote) ? 'full' : currentView === 'planner' ? 'wide' : '';
+  const searchPlaceholder = currentView === 'notes' ? 'Search notes' : currentView === 'inbox' ? 'Search inbox' : 'Search tasks';
+
+  const renderView = () => {
+    if (!loaded && ['today', 'upcoming', 'all', 'overdue', 'inbox'].includes(currentView)) return <TaskListSkeleton rows={6} />;
+    switch (currentView) {
+      case 'matrix':
+        return (
+          <EisenhowerMatrix
+            tasks={searchedTasks}
+            aiStatus={aiStatus}
+            onToggleComplete={handleToggleComplete}
+            onEditTask={handleOpenEdit}
+            onDeleteTask={handleDeleteTask}
+            onMoveQuadrant={handleMoveQuadrant}
+            onReanalyzeTask={handleReanalyzeTask}
+            onQuickAdd={handleQuickAdd}
+            onInlineCreateTask={handleInlineCreateTask}
+          />
+        );
+      case 'planner':
+        return (
+          <DayPlanner
+            tasks={searchedTasks}
+            onToggleComplete={handleToggleComplete}
+            onEditTask={handleOpenEdit}
+            onDeleteTask={handleDeleteTask}
+            onUpdateTaskDate={handleUpdateTaskDate}
+            onQuickCreateTask={handleQuickCreateTaskForDay}
+          />
+        );
+      case 'today':
+        return (
+          <TodayView
+            tasks={searchedTasks}
+            user={currentUser}
+            overdueCount={counts.overdue}
+            onGoOverdue={() => navigate('overdue')}
+            onQuickCreate={handleQuickCreateTaskForDay}
+            onCaptureSaved={handleCaptureSaved}
+            onTaskCreated={handleTaskCreated}
+            onCaptureConverted={handleCaptureConverted}
+            {...actions}
+          />
+        );
+      case 'inbox':
+        return (
+          <InboxView
+            captures={captures}
+            searchQuery={searchQuery}
+            onConvertToTask={handleConvertCaptureToTask}
+            onConvertToNote={handleConvertCaptureToNote}
+            onDelete={handleDeleteCapture}
+            onCaptureSaved={handleCaptureSaved}
+            onTaskCreated={handleTaskCreated}
+            onCaptureConverted={handleCaptureConverted}
+          />
+        );
+      case 'upcoming':
+        return <UpcomingView tasks={searchedTasks} searchQuery={searchQuery} {...actions} />;
+      case 'all':
+        return <AllTasksView tasks={searchedTasks} searchQuery={searchQuery} statusFilter={statusFilter} onStatusFilter={setStatusFilter} {...actions} />;
+      case 'overdue':
+        return <OverdueView tasks={searchedTasks} searchQuery={searchQuery} {...actions} />;
+      case 'notes':
+        return activeNote ? (
+          <NoteEditor note={activeNote} onUpdateNote={handleUpdateNote} onDeleteNote={handleDeleteNote} onConvertToTask={(t) => setTasks((prev) => [t, ...prev])} onClose={() => setActiveNote(null)} />
+        ) : (
+          <NotesView notes={notes} searchQuery={searchQuery} onOpen={setActiveNote} onCreate={handleCreateNewNote} onUpdateNote={handleUpdateNote} onDeleteNote={handleDeleteNote} />
+        );
+      case 'plans':
+        return openPlanId ? (
+          <PlanDetail
+            plan={openPlan}
+            onBack={() => {
+              setOpenPlanId(null);
+              setOpenPlan(null);
+            }}
+            onToggleItem={handleTogglePlanItem}
+            onRescheduleClick={(item) => setRescheduleItems([{ ...item, planTitle: openPlan?.title || '' }])}
+          />
+        ) : (
+          <PlansView plans={plans} onCreate={handleCreatePlan} onDelete={handleDeletePlan} onOpen={handleOpenPlan} />
+        );
     }
-
-    if (currentView === 'upcoming') {
-      if (t.status === 'ARCHIVED' || t.status === 'COMPLETED') return false;
-      return dueTime !== null && dueTime > endOfToday;
-    }
-
-    if (currentView === 'overdue') {
-      if (t.status === 'ARCHIVED' || t.status === 'COMPLETED') return false;
-      return dueTime !== null && dueTime < now.getTime();
-    }
-
-    if (currentView === 'all') {
-      if (statusFilter !== 'ALL' && t.status !== statusFilter) return false;
-      return true;
-    }
-
-    return true;
-  });
-
-  // Calculate Badges
-  const nowTime = Date.now();
-  const todayTasksCount = tasks.filter((t) => {
-    if (t.status === 'COMPLETED' || t.status === 'ARCHIVED') return false;
-    if (!t.dueAt) return false;
-    const d = new Date(t.dueAt);
-    const today = new Date();
-    return d.getDate() === today.getDate() && d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
-  }).length;
-
-  const overdueCount = tasks.filter((t) => {
-    if (t.status === 'COMPLETED' || t.status === 'ARCHIVED') return false;
-    return t.dueAt ? new Date(t.dueAt).getTime() < nowTime : false;
-  }).length;
-
-  const inboxCount = captures.length;
+  };
 
   return (
-    <div className="app-container">
-      {/* Sidebar Navigation */}
-      <aside className="sidebar">
-        <div className="sidebar-brand">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--text-primary)' }} />
-            <span>Productivity Inbox</span>
+    <div className="app">
+      <Sidebar
+        current={currentView}
+        onNavigate={navigate}
+        counts={counts}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={toggleSidebar}
+        mobileOpen={mobileNavOpen}
+        onCloseMobile={() => setMobileNavOpen(false)}
+        user={currentUser}
+        aiStatus={aiStatus}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onSignIn={() => setIsAuthOpen(true)}
+        onSignOut={async () => {
+          const ok = await confirm({ title: 'Sign out?', message: 'You can sign back in any time.', confirmLabel: 'Sign out' });
+          if (!ok) return;
+          api.auth.logout().catch(() => {});
+          setAuthToken(null);
+          setCurrentUser(null);
+          setIsAuthOpen(true);
+        }}
+      />
+
+      <main className="main">
+        <Topbar
+          title={pageTitle}
+          subtitle={currentView === 'plans' && openPlanId ? 'Study plan' : nav.subtitle}
+          icon={nav.icon}
+          searchQuery={searchQuery}
+          onSearch={setSearchQuery}
+          searchPlaceholder={searchPlaceholder}
+          showSearch={showSearch}
+          onAddTask={() => handleQuickAdd()}
+          onOpenPalette={() => setPaletteOpen(true)}
+          onOpenNotifications={() => setIsNotifDrawerOpen(true)}
+          unreadCount={unreadNotifCount}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenMobileNav={() => setMobileNavOpen(true)}
+        />
+
+        <div className="content">
+          <div className={`content-inner ${layout}`} key={`${currentView}-${openPlanId ?? ''}-${activeNote ? 'editor' : ''}`}>
+            {renderView()}
           </div>
-          <span className="sidebar-brand-badge">SQLite</span>
         </div>
 
-        <nav className="nav-group">
-          <button
-            className={`nav-item ${currentView === 'matrix' ? 'active' : ''}`}
-            onClick={() => {
-              setCurrentView('matrix');
-              setActiveNote(null);
-            }}
-          >
-            <div className="nav-item-left">
-              <LayoutGrid size={15} />
-              <span>Eisenhower Matrix</span>
-            </div>
-            <span className="sidebar-brand-badge" style={{ fontSize: 9 }}>AI</span>
-          </button>
-
-          <button
-            className={`nav-item ${currentView === 'planner' ? 'active' : ''}`}
-            onClick={() => {
-              setCurrentView('planner');
-              setActiveNote(null);
-            }}
-          >
-            <div className="nav-item-left">
-              <CalendarDays size={15} />
-              <span>Day Planner</span>
-            </div>
-            <span className="sidebar-brand-badge" style={{ fontSize: 9 }}>Schedule</span>
-          </button>
-
-          <button
-            className={`nav-item ${currentView === 'today' ? 'active' : ''}`}
-            onClick={() => {
-              setCurrentView('today');
-              setActiveNote(null);
-            }}
-          >
-            <div className="nav-item-left">
-              <Calendar size={15} />
-              <span>Today</span>
-            </div>
-            {todayTasksCount > 0 && <span className="nav-badge">{todayTasksCount}</span>}
-          </button>
-
-          <button
-            className={`nav-item ${currentView === 'inbox' ? 'active' : ''}`}
-            onClick={() => {
-              setCurrentView('inbox');
-              setActiveNote(null);
-            }}
-          >
-            <div className="nav-item-left">
-              <Inbox size={15} />
-              <span>Inbox</span>
-            </div>
-            {inboxCount > 0 && <span className="nav-badge">{inboxCount}</span>}
-          </button>
-
-          <button
-            className={`nav-item ${currentView === 'upcoming' ? 'active' : ''}`}
-            onClick={() => {
-              setCurrentView('upcoming');
-              setActiveNote(null);
-            }}
-          >
-            <div className="nav-item-left">
-              <Clock size={15} />
-              <span>Upcoming</span>
-            </div>
-          </button>
-
-          <button
-            className={`nav-item ${currentView === 'all' ? 'active' : ''}`}
-            onClick={() => {
-              setCurrentView('all');
-              setActiveNote(null);
-            }}
-          >
-            <div className="nav-item-left">
-              <CheckSquare size={15} />
-              <span>All Tasks</span>
-            </div>
-          </button>
-
-          <button
-            className={`nav-item ${currentView === 'notes' ? 'active' : ''}`}
-            onClick={() => {
-              setCurrentView('notes');
-            }}
-          >
-            <div className="nav-item-left">
-              <BookOpen size={15} />
-              <span>Idea Pad</span>
-            </div>
-            {notes.length > 0 && <span className="nav-badge">{notes.length}</span>}
-          </button>
-
-          <button
-            className={`nav-item ${currentView === 'overdue' ? 'active' : ''}`}
-            onClick={() => {
-              setCurrentView('overdue');
-              setActiveNote(null);
-            }}
-          >
-            <div className="nav-item-left">
-              <AlertTriangle size={15} style={{ color: overdueCount > 0 ? 'var(--danger)' : undefined }} />
-              <span style={{ color: overdueCount > 0 ? 'var(--danger)' : undefined }}>Overdue</span>
-            </div>
-            {overdueCount > 0 && <span className="nav-badge danger">{overdueCount}</span>}
-          </button>
-        </nav>
-
-        {/* Sidebar Footer with User profile */}
-        <div className="sidebar-footer">
-          {currentUser ? (
-            <div className="user-profile-row">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <User size={14} className="text-secondary" />
-                <span className="user-email-text" title={currentUser.email}>
-                  {currentUser.displayName || currentUser.email}
-                </span>
-              </div>
-              <button
-                className="btn btn-ghost btn-icon"
-                title="Sign Out"
-                onClick={() => {
-                  api.auth.logout();
-                  setAuthToken(null);
-                  setCurrentUser(null);
-                  setIsAuthOpen(true);
-                }}
-              >
-                <LogOut size={13} />
-              </button>
-            </div>
-          ) : (
-            <button className="btn btn-primary btn-sm" onClick={() => setIsAuthOpen(true)}>
-              Sign In
-            </button>
-          )}
-        </div>
-      </aside>
-
-      {/* Main View Area */}
-      <main className="main-wrapper">
-        {/* Top Bar */}
-        <header className="top-bar">
-          <div className="top-bar-left">
-            <h1 className="page-title">
-              {currentView === 'matrix' && 'Eisenhower Matrix'}
-              {currentView === 'planner' && 'Day-by-Day Task Schedule'}
-              {currentView === 'today' && 'Today'}
-              {currentView === 'inbox' && 'Universal Inbox'}
-              {currentView === 'upcoming' && 'Upcoming Tasks'}
-              {currentView === 'all' && 'All Tasks'}
-              {currentView === 'notes' && 'Idea Pad & Notes'}
-              {currentView === 'overdue' && 'Overdue Attention'}
-            </h1>
-          </div>
-
-          <div className="top-bar-actions">
-            {/* Quick Add Task Button */}
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => handleQuickAdd()}
-              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-            >
-              <Plus size={14} /> Add Task
-            </button>
-
-            {/* Search Input */}
-            <div style={{ position: 'relative', width: 200 }}>
-              <Search size={14} style={{ position: 'absolute', left: 10, top: 10, color: 'var(--text-muted)' }} />
-              <input
-                type="text"
-                className="input"
-                style={{ paddingLeft: 30, height: 34, fontSize: 13 }}
-                placeholder="Search..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-
-            {/* Notifications Bell */}
-            <button
-              className="btn btn-ghost btn-icon"
-              style={{ position: 'relative' }}
-              title="Notifications"
-              onClick={() => setIsNotifDrawerOpen(true)}
-            >
-              <Bell size={16} />
-              {unreadNotifCount > 0 && (
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: 4,
-                    right: 4,
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    backgroundColor: 'var(--danger)'
-                  }}
-                />
-              )}
-            </button>
-
-            {/* Theme Toggle */}
-            <button className="btn btn-ghost btn-icon" title="Toggle Light/Dark Theme" onClick={toggleTheme}>
-              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-            </button>
-
-            {/* Settings */}
-            <button className="btn btn-ghost btn-icon" title="Settings" onClick={() => setIsSettingsOpen(true)}>
-              <SettingsIcon size={16} />
-            </button>
-          </div>
-        </header>
-
-        {/* Content Scroll View */}
-        <div className="content-scroll">
-          {/* Universal Quick Capture Bar: always visible on task/inbox views */}
-          {currentView !== 'notes' && (
-            <QuickCapture
-              onCaptureSaved={handleCaptureSaved}
-              onTaskCreated={(task) => setTasks((prev) => [task, ...prev])}
-            />
-          )}
-
-          {/* INBOX VIEW */}
-          {currentView === 'inbox' && (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                  Unprocessed captures waiting to be organized or converted
-                </span>
-                <span className="badge">{captures.length} items</span>
-              </div>
-
-              {captures.length === 0 ? (
-                <div className="empty-state">
-                  <Inbox size={28} className="empty-state-icon" />
-                  <div className="empty-state-title">Inbox is clear</div>
-                  <div className="empty-state-desc">Capture raw thoughts or tasks anytime above!</div>
-                </div>
-              ) : (
-                captures.map((cap) => (
-                  <div key={cap.id} className="item-card">
-                    <div className="item-content">
-                      <div className="item-title">{cap.rawText}</div>
-                      <div className="item-meta">
-                        <span className="badge">{cap.detectedType}</span>
-                        {cap.suggestedDueAt && (
-                          <span className="badge" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <Sparkles size={11} /> {formatDate(cap.suggestedDueAt)}
-                          </span>
-                        )}
-                        {cap.parseStatus === 'NEEDS_REVIEW' && (
-                          <span className="badge badge-high">Needs Date Confirmation</span>
-                        )}
-                        <span style={{ color: 'var(--text-muted)' }}>{formatDate(cap.createdAt)}</span>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => handleConvertCaptureToTask(cap)}
-                        title="Convert to Task"
-                      >
-                        <CheckSquare size={13} /> Task
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => handleConvertCaptureToNote(cap)}
-                        title="Convert to Note"
-                      >
-                        <FileText size={13} /> Note
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-icon"
-                        onClick={() => handleDeleteCapture(cap.id)}
-                        title="Delete"
-                      >
-                        <Trash2 size={13} style={{ color: 'var(--danger)' }} />
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-
-          {/* EISENHOWER MATRIX VIEW */}
-          {currentView === 'matrix' && (
-            <div style={{ height: 'calc(100vh - 200px)' }}>
-              <EisenhowerMatrix
-                tasks={tasks}
-                aiStatus={aiStatus}
-                onToggleComplete={handleToggleComplete}
-                onEditTask={handleOpenEdit}
-                onDeleteTask={handleDeleteTask}
-                onMoveQuadrant={handleMoveQuadrant}
-                onReanalyzeTask={handleReanalyzeTask}
-                onQuickAdd={handleQuickAdd}
-                onInlineCreateTask={handleInlineCreateTask}
-              />
-            </div>
-          )}
-
-          {/* DAY PLANNER & SCHEDULE SPLITTING VIEW */}
-          {currentView === 'planner' && (
-            <DayPlanner
-              tasks={tasks}
-              onToggleComplete={handleToggleComplete}
-              onEditTask={handleOpenEdit}
-              onDeleteTask={handleDeleteTask}
-              onUpdateTaskDate={handleUpdateTaskDate}
-              onQuickCreateTask={handleQuickCreateTaskForDay}
-            />
-          )}
-
-          {/* TASK VIEWS: TODAY / UPCOMING / ALL / OVERDUE */}
-          {['today', 'upcoming', 'all', 'overdue'].includes(currentView) && (
-            <div>
-              {/* Filter tabs for ALL TASKS */}
-              {currentView === 'all' && (
-                <div style={{ display: 'flex', gap: 6, marginBottom: 16, overflowX: 'auto', paddingBottom: 4 }}>
-                  {['ALL', 'TODO', 'IN_PROGRESS', 'COMPLETED', 'ARCHIVED'].map((st) => (
-                    <button
-                      key={st}
-                      className={`btn btn-sm ${statusFilter === st ? 'btn-primary' : 'btn-ghost'}`}
-                      onClick={() => setStatusFilter(st)}
-                    >
-                      {st.replace('_', ' ')}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {filteredTasks.length === 0 ? (
-                <div className="empty-state">
-                  <CheckSquare size={28} className="empty-state-icon" />
-                  <div className="empty-state-title">No tasks found</div>
-                  <div className="empty-state-desc">
-                    {currentView === 'today'
-                      ? 'You have no tasks scheduled for today. Enjoy your day!'
-                      : 'Capture a task above to get started.'}
-                  </div>
-                </div>
-              ) : (
-                filteredTasks.map((task) => (
-                  <TaskItem
-                    key={task.id}
-                    task={task}
-                    onToggleComplete={handleToggleComplete}
-                    onEdit={handleOpenEdit}
-                    onDelete={handleDeleteTask}
-                    onAddReminder={(t) => setReminderTask(t)}
-                    onSnooze={handleSnooze}
-                  />
-                ))
-              )}
-            </div>
-          )}
-
-          {/* IDEA PAD / NOTES VIEW */}
-          {currentView === 'notes' && (
-            <div style={{ height: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column' }}>
-              {activeNote ? (
-                <NoteEditor
-                  note={activeNote}
-                  onUpdateNote={handleUpdateNote}
-                  onDeleteNote={handleDeleteNote}
-                  onConvertToTask={(t) => setTasks((prev) => [t, ...prev])}
-                  onClose={() => setActiveNote(null)}
-                />
-              ) : (
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                    <div>
-                      <h2 style={{ fontSize: 16, fontWeight: 600 }}>Notes & Thoughts</h2>
-                      <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                        Distraction-free idea pad with instant autosaving and Markdown support
-                      </p>
-                    </div>
-                    <button className="btn btn-primary btn-sm" onClick={handleCreateNewNote}>
-                      <Plus size={14} /> New Note
-                    </button>
-                  </div>
-
-                  {notes.length === 0 ? (
-                    <div className="empty-state">
-                      <BookOpen size={28} className="empty-state-icon" />
-                      <div className="empty-state-title">No notes yet</div>
-                      <div className="empty-state-desc">Capture freeform ideas and thoughts without constraints.</div>
-                      <button className="btn btn-primary btn-sm" style={{ marginTop: 14 }} onClick={handleCreateNewNote}>
-                        Create first note
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="notes-grid">
-                      {notes.map((note) => (
-                        <div key={note.id} className="note-card" onClick={() => setActiveNote(note)}>
-                          <div className="note-title">{note.title || 'Untitled note'}</div>
-                          <div className="note-preview">{note.content || 'Blank note...'}</div>
-                          <div className="note-footer">
-                            <span>{formatDate(note.updatedAt)}</span>
-                            {note.isPinned && <span className="badge">Pinned</span>}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <button className="fab" onClick={() => setPaletteOpen(true)} aria-label="Quick capture">
+          <Sparkles />
+        </button>
       </main>
 
-      {/* Task Creation & Edit Modal */}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onCaptureSaved={handleCaptureSaved}
+        onTaskCreated={handleTaskCreated}
+        onCaptureConverted={handleCaptureConverted}
+        onNavigate={navigate}
+        onNewTask={() => handleQuickAdd()}
+        onNewNote={handleCreateNewNote}
+        onToggleTheme={toggleTheme}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+      />
+
       <TaskEditorModal
         task={modalTask}
         isOpen={isTaskModalOpen}
+        categories={categories}
         onClose={() => {
           setIsTaskModalOpen(false);
           setModalTask(null);
@@ -838,12 +734,9 @@ export function App() {
         onReanalyze={handleReanalyzeTask}
       />
 
-      <ReminderPickerModal
-        task={reminderTask}
-        isOpen={Boolean(reminderTask)}
-        onClose={() => setReminderTask(null)}
-        onSetReminder={handleSetReminder}
-      />
+      <ReminderPickerModal task={reminderTask} isOpen={Boolean(reminderTask)} onClose={() => setReminderTask(null)} onSetReminder={handleSetReminder} />
+
+      {rescheduleItems && rescheduleItems.length > 0 && <RescheduleModal items={rescheduleItems} planTitles={planTitles} onReschedule={handleReschedulePlanItem} onClose={closeRescheduleModal} />}
 
       <NotificationDrawer
         isOpen={isNotifDrawerOpen}
@@ -853,11 +746,13 @@ export function App() {
           await api.notifications.markRead(id);
           setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, readAt: new Date().toISOString() } : n)));
           setUnreadNotifCount((prev) => Math.max(0, prev - 1));
+          lastUnread.current = Math.max(0, (lastUnread.current ?? 1) - 1);
         }}
         onMarkAllRead={async () => {
           await api.notifications.markAllRead();
-          setNotifications((prev) => prev.map((n) => ({ ...n, readAt: new Date().toISOString() })));
+          setNotifications((prev) => prev.map((n) => ({ ...n, readAt: n.readAt ?? new Date().toISOString() })));
           setUnreadNotifCount(0);
+          lastUnread.current = 0;
         }}
       />
 
@@ -870,20 +765,23 @@ export function App() {
           const res = await api.user.updateMe(userData);
           setCurrentUser(res.user);
         }}
-        onUpdatePreferences={async (prefs: Partial<UserPreferences>) => {
+        onUpdatePreferences={async (prefs: PreferencesUpdate) => {
           const res = await api.user.updatePreferences(prefs);
           setPreferences(res);
+          toast({ title: 'Settings saved' });
         }}
-        currentTheme={theme}
-        onToggleTheme={toggleTheme}
+        themePref={themePref}
+        onThemePref={chooseTheme}
       />
 
       <AuthModal
         isOpen={isAuthOpen}
+        canDismiss={!!currentUser}
         onClose={() => setIsAuthOpen(false)}
         onSuccess={(u, p) => {
           setCurrentUser(u);
           setPreferences(p);
+          setLoaded(false);
           loadAllData();
         }}
       />

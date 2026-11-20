@@ -1,73 +1,9 @@
-import { useState, useEffect } from 'react';
-import {
-  Check,
-  Calendar,
-  Sparkles,
-  Edit3,
-  Trash2,
-  Plus,
-  RefreshCw,
-  Maximize2,
-  X,
-  Search
-} from 'lucide-react';
-import { formatDate, isOverdue } from '../../lib/date';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Plus, RefreshCw, Maximize2, Pencil, Trash2, Ellipsis, Sparkles, Hash, ChevronDown, ArrowRightLeft, Check, SearchX } from 'lucide-react';
 import type { Task, EisenhowerQuadrant, AIStatus } from '../../types';
+import { QUADRANTS, QUADRANT_BY_KEY, type QuadrantMeta } from '../../lib/quadrants';
+import { AITag, Button, CategoryTag, Dialog, DueTag, IconButton, Menu, MenuItem, MenuLabel, MenuSep, SearchField, Segmented, Spinner, Switch, TaskCheck } from '../ui';
 import './EisenhowerMatrix.css';
-
-interface QuadrantMeta {
-  key: EisenhowerQuadrant;
-  number: number;
-  name: string;
-  tagline: string;
-  urgencyLabel: string;
-  importanceLabel: string;
-  description: string;
-  accentClass: string;
-}
-
-const QUADRANTS: QuadrantMeta[] = [
-  {
-    key: 'DO_FIRST',
-    number: 1,
-    name: 'Do First',
-    tagline: 'Urgent & Important · Immediate focus and crisis resolution',
-    urgencyLabel: 'Urgent',
-    importanceLabel: 'Important',
-    description: 'High urgency and critical importance. Tasks with imminent deadlines and major impact.',
-    accentClass: 'quadrant-do-first'
-  },
-  {
-    key: 'SCHEDULE',
-    number: 2,
-    name: 'Schedule',
-    tagline: 'Important & Not Urgent · Strategic planning and high value',
-    urgencyLabel: 'Not Urgent',
-    importanceLabel: 'Important',
-    description: 'High value long-term goals, strategic thinking, deep work, learning, and health planning.',
-    accentClass: 'quadrant-schedule'
-  },
-  {
-    key: 'DELEGATE',
-    number: 3,
-    name: 'Delegate',
-    tagline: 'Urgent & Not Important · Interruptions and routine chores',
-    urgencyLabel: 'Urgent',
-    importanceLabel: 'Not Important',
-    description: 'Time-sensitive requests, routine admin chores, or interruptions that do not need your primary expertise.',
-    accentClass: 'quadrant-delegate'
-  },
-  {
-    key: 'ELIMINATE',
-    number: 4,
-    name: 'Eliminate',
-    tagline: 'Not Urgent & Not Important · Distractions and low yield',
-    urgencyLabel: 'Not Urgent',
-    importanceLabel: 'Not Important',
-    description: 'Trivial leisure, busywork, distractions, or low-yield activities to decline or prune.',
-    accentClass: 'quadrant-eliminate'
-  }
-];
 
 interface EisenhowerMatrixProps {
   tasks: Task[];
@@ -78,8 +14,215 @@ interface EisenhowerMatrixProps {
   onMoveQuadrant: (taskId: string, quadrant: EisenhowerQuadrant) => Promise<void>;
   onReanalyzeTask: (taskId: string) => Promise<void>;
   onQuickAdd: (quadrant?: EisenhowerQuadrant) => void;
-  onInlineCreateTask?: (title: string, quadrant: EisenhowerQuadrant) => Promise<any>;
+  onInlineCreateTask?: (title: string, quadrant: EisenhowerQuadrant) => Promise<unknown>;
 }
+
+const DRAG_MIME = 'application/x-task-id';
+const quadrantOfTask = (t: Task): EisenhowerQuadrant => t.eisenhowerQuadrant || 'DO_FIRST';
+
+/* ---------------- Card ---------------- */
+
+interface CardProps {
+  task: Task;
+  busy: boolean;
+  dragging: boolean;
+  onDragStart: (id: string) => void;
+  onDragEnd: () => void;
+  onToggleComplete: (task: Task) => void;
+  onEdit: (task: Task) => void;
+  onDelete: (id: string) => void;
+  onMove: (id: string, q: EisenhowerQuadrant) => void;
+  onReanalyze: (id: string) => void;
+}
+
+const MatrixCard = ({ task, busy, dragging, onDragStart, onDragEnd, onToggleComplete, onEdit, onDelete, onMove, onReanalyze }: CardProps) => {
+  const [showWhy, setShowWhy] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const done = task.status === 'COMPLETED';
+  const current = quadrantOfTask(task);
+
+  return (
+    <div
+      className={`mcard ${done ? 'is-done' : ''} ${dragging ? 'is-dragging' : ''} ${busy ? 'is-busy' : ''} ${menuOpen ? 'is-menu-open' : ''}`}
+      draggable={!done}
+      onDragStart={(e) => {
+        e.dataTransfer.setData(DRAG_MIME, task.id);
+        e.dataTransfer.setData('text/plain', task.title);
+        e.dataTransfer.effectAllowed = 'move';
+        onDragStart(task.id);
+      }}
+      onDragEnd={onDragEnd}
+      onClick={() => onEdit(task)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => e.target === e.currentTarget && e.key === 'Enter' && onEdit(task)}
+      aria-label={task.title}
+    >
+      <div className="mcard-top">
+        <TaskCheck checked={done} onToggle={() => onToggleComplete(task)} quadrant={current} />
+        <div className="mcard-body">
+          <div className="mcard-title">
+            <span className="task-title-text">{task.title}</span>
+          </div>
+          {task.description && <div className="mcard-desc">{task.description}</div>}
+          <div className="mcard-meta">
+            <DueTag task={task} size="sm" />
+            <CategoryTag category={task.category} size="sm" />
+            {task.aiAnalysis && (
+              <AITag
+                source={task.aiAnalysis.source}
+                active={showWhy}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowWhy((v) => !v);
+                }}
+              />
+            )}
+          </div>
+        </div>
+        <div className="mcard-actions" onClick={(e) => e.stopPropagation()}>
+          <IconButton icon={RefreshCw} label="Re-analyze with AI" size="sm" spinning={busy} disabled={busy} onClick={() => onReanalyze(task.id)} />
+          <Menu width={220} onOpenChange={setMenuOpen} trigger={(p) => <IconButton {...p} icon={Ellipsis} label="More" size="sm" />}>
+            {(close) => (
+              <>
+                <MenuLabel>Move to</MenuLabel>
+                {QUADRANTS.map((q) => (
+                  <MenuItem
+                    key={q.key}
+                    swatch={q.color}
+                    selected={q.key === current}
+                    hint={q.key === current ? <Check size={14} /> : q.code}
+                    onSelect={() => {
+                      close();
+                      if (q.key !== current) onMove(task.id, q.key);
+                    }}
+                  >
+                    {q.name}
+                  </MenuItem>
+                ))}
+                <MenuSep />
+                <MenuItem
+                  icon={Pencil}
+                  onSelect={() => {
+                    close();
+                    onEdit(task);
+                  }}
+                >
+                  Edit details
+                </MenuItem>
+                <MenuItem
+                  icon={Trash2}
+                  danger
+                  onSelect={() => {
+                    close();
+                    onDelete(task.id);
+                  }}
+                >
+                  Delete
+                </MenuItem>
+              </>
+            )}
+          </Menu>
+        </div>
+      </div>
+
+      {showWhy && task.aiAnalysis && (
+        <div className="ai-why" onClick={(e) => e.stopPropagation()}>
+          <div className="ai-why-head">
+            <Sparkles /> {task.aiAnalysis.model || task.aiAnalysis.source}
+            <span className="ai-why-scores">
+              U {task.aiAnalysis.urgencyScore}/10 · I {task.aiAnalysis.importanceScore}/10
+            </span>
+          </div>
+          <div className="ai-why-bars">
+            <span>Urgency</span>
+            <i>
+              <b style={{ width: `${task.aiAnalysis.urgencyScore * 10}%` }} />
+            </i>
+            <span>Importance</span>
+            <i>
+              <b style={{ width: `${task.aiAnalysis.importanceScore * 10}%` }} />
+            </i>
+          </div>
+          <p>{task.aiAnalysis.reasoning}</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ---------------- Inline add ---------------- */
+
+const InlineAdd = ({ quadrant, onCreate, onDetailed, autoOpen }: { quadrant: QuadrantMeta; onCreate?: (title: string) => Promise<unknown>; onDetailed: () => void; autoOpen?: boolean }) => {
+  const [open, setOpen] = useState(!!autoOpen);
+  const [title, setTitle] = useState('');
+  const [saving, setSaving] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (open) ref.current?.focus();
+  }, [open]);
+
+  if (!onCreate) {
+    return (
+      <button className="q-add" onClick={onDetailed}>
+        <Plus /> Add to {quadrant.name}
+      </button>
+    );
+  }
+
+  if (!open) {
+    return (
+      <button className="q-add" onClick={() => setOpen(true)}>
+        <Plus /> Add to {quadrant.name}
+      </button>
+    );
+  }
+
+  return (
+    <form
+      className="inline-add q-inline"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!title.trim() || saving) return;
+        setSaving(true);
+        try {
+          await onCreate(title.trim());
+          setTitle('');
+        } finally {
+          setSaving(false);
+          ref.current?.focus();
+        }
+      }}
+    >
+      {saving ? <Spinner size={14} /> : <Plus className="inline-add-icon" />}
+      <input
+        ref={ref}
+        className="inline-add-input"
+        placeholder={`New ${quadrant.name.toLowerCase()} task…`}
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onBlur={() => !title && !autoOpen && setOpen(false)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            if (title) {
+              e.stopPropagation();
+              setTitle('');
+            } else if (!autoOpen) {
+              e.stopPropagation();
+              setOpen(false);
+            }
+            // empty + always-open (focus dialog): let Escape close the dialog
+          }
+        }}
+        aria-label={`New task in ${quadrant.name}`}
+      />
+      <IconButton icon={Maximize2} label="Add with details" size="sm" tipPos="top" onMouseDown={(e) => e.preventDefault()} onClick={onDetailed} />
+    </form>
+  );
+};
+
+/* ---------------- Matrix ---------------- */
 
 export const EisenhowerMatrix = ({
   tasks,
@@ -92,509 +235,303 @@ export const EisenhowerMatrix = ({
   onQuickAdd,
   onInlineCreateTask
 }: EisenhowerMatrixProps) => {
-  const [activeCategory, setActiveCategory] = useState<string>('ALL');
-  const [showCompleted, setShowCompleted] = useState<boolean>(false);
-  const [reanalyzingId, setReanalyzingId] = useState<string | null>(null);
-  const [activeTooltipId, setActiveTooltipId] = useState<string | null>(null);
+  const [category, setCategory] = useState<string>('ALL');
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overQ, setOverQ] = useState<EisenhowerQuadrant | null>(null);
+  const [mobileQ, setMobileQ] = useState<EisenhowerQuadrant>('DO_FIRST');
+  const [focusQ, setFocusQ] = useState<EisenhowerQuadrant | null>(null);
+  const [focusSearch, setFocusSearch] = useState('');
+  const touchX = useRef<number | null>(null);
 
-  // Popup Modal state for focused quadrant view
-  const [modalQuadrant, setModalQuadrant] = useState<EisenhowerQuadrant | null>(null);
-  const [modalSearch, setModalSearch] = useState<string>('');
-  const [inlineTitle, setInlineTitle] = useState<string>('');
-  const [isInlineSaving, setIsInlineSaving] = useState<boolean>(false);
+  const categories = useMemo(() => Array.from(new Set(tasks.filter((t) => t.status !== 'ARCHIVED').map((t) => t.category || 'General'))).sort(), [tasks]);
 
-  // Close modal on Escape key
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (activeTooltipId) {
-          setActiveTooltipId(null);
-        } else if (modalQuadrant) {
-          setModalQuadrant(null);
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [modalQuadrant, activeTooltipId]);
+  const byQuadrant = useMemo(() => {
+    const map: Record<EisenhowerQuadrant, Task[]> = { DO_FIRST: [], SCHEDULE: [], DELEGATE: [], ELIMINATE: [] };
+    for (const t of tasks) {
+      if (t.status === 'ARCHIVED') continue;
+      if (!showCompleted && t.status === 'COMPLETED') continue;
+      if (category !== 'ALL' && (t.category || 'General') !== category) continue;
+      map[quadrantOfTask(t)].push(t);
+    }
+    // open tasks first, then by due date
+    for (const k of Object.keys(map) as EisenhowerQuadrant[]) {
+      map[k].sort((a, b) => Number(a.status === 'COMPLETED') - Number(b.status === 'COMPLETED') || (a.dueAt ? Date.parse(a.dueAt) : Infinity) - (b.dueAt ? Date.parse(b.dueAt) : Infinity));
+    }
+    return map;
+  }, [tasks, showCompleted, category]);
 
-  // Filter tasks
-  const filteredTasks = tasks.filter((t) => {
-    if (t.status === 'ARCHIVED') return false;
-    if (!showCompleted && t.status === 'COMPLETED') return false;
-    if (activeCategory !== 'ALL' && (t.category || 'General') !== activeCategory) return false;
-    return true;
-  });
+  const openCount = (k: EisenhowerQuadrant) => byQuadrant[k].filter((t) => t.status !== 'COMPLETED').length;
+  const totalOpen = QUADRANTS.reduce((n, q) => n + openCount(q.key), 0);
 
-  // Extract unique categories
-  const categories = Array.from(new Set(tasks.map((t) => t.category || 'General'))).filter(Boolean);
-
-  // Helper to get tasks for a quadrant
-  const getTasksForQuadrant = (quadrant: EisenhowerQuadrant) => {
-    return filteredTasks.filter((t) => (t.eisenhowerQuadrant || 'DO_FIRST') === quadrant);
-  };
-
-  const handleReanalyze = async (taskId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const reanalyze = async (id: string) => {
+    setBusyId(id);
     try {
-      setReanalyzingId(taskId);
-      await onReanalyzeTask(taskId);
+      await onReanalyzeTask(id);
     } finally {
-      setReanalyzingId(null);
+      setBusyId(null);
     }
   };
 
-  const handleInlineAddSubmit = async (e: React.FormEvent) => {
+  const move = (id: string, q: EisenhowerQuadrant) => void onMoveQuadrant(id, q);
+
+  const drop = (e: React.DragEvent, q: EisenhowerQuadrant) => {
     e.preventDefault();
-    if (!inlineTitle.trim() || !modalQuadrant) return;
-    setIsInlineSaving(true);
-    try {
-      if (onInlineCreateTask) {
-        await onInlineCreateTask(inlineTitle.trim(), modalQuadrant);
-        setInlineTitle('');
-      } else {
-        onQuickAdd(modalQuadrant);
-      }
-    } finally {
-      setIsInlineSaving(false);
-    }
+    const id = e.dataTransfer.getData(DRAG_MIME);
+    setOverQ(null);
+    setDragId(null);
+    if (!id) return;
+    const task = tasks.find((t) => t.id === id);
+    if (task && quadrantOfTask(task) !== q) move(id, q);
   };
 
-  const renderTaskCard = (task: Task) => {
-    const isCompleted = task.status === 'COMPLETED';
-    const overdue = !isCompleted && isOverdue(task.dueAt);
-    const isBusy = reanalyzingId === task.id;
-
-    return (
-      <div
-        key={task.id}
-        className={`matrix-card ${isCompleted ? 'completed' : ''}`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="matrix-card-top">
-          <div
-            className={`checkbox-custom ${isCompleted ? 'checked' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleComplete(task);
-            }}
-            role="checkbox"
-            aria-checked={isCompleted}
-            tabIndex={0}
-            title={isCompleted ? 'Mark incomplete' : 'Mark completed'}
-          >
-            {isCompleted && <Check size={12} strokeWidth={3} />}
-          </div>
-
-          <div
-            className={`matrix-card-title ${isCompleted ? 'completed' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onEditTask(task);
-            }}
-            style={{ cursor: 'pointer' }}
-          >
-            {task.title}
-          </div>
-        </div>
-
-        {task.description && (
-          <div
-            className="matrix-card-desc"
-            onClick={(e) => {
-              e.stopPropagation();
-              onEditTask(task);
-            }}
-            style={{ cursor: 'pointer' }}
-          >
-            {task.description}
-          </div>
-        )}
-
-        <div className="matrix-card-meta">
-          {task.category && (
-            <span className="meta-pill category" title="AI Categorization">
-              {task.category}
-            </span>
-          )}
-
-          {task.dueAt && (
-            <span
-              className={`meta-pill ${task.isDeadline ? 'deadline' : ''} ${overdue ? 'overdue' : ''}`}
-              title={task.isDeadline ? 'Hard deadline identified' : 'Date mentioned in context'}
-            >
-              <Calendar size={10} />
-              {formatDate(task.dueAt)}
-              {task.isDeadline && ' (Deadline)'}
-              {overdue && ' (Overdue)'}
-            </span>
-          )}
-
-          {task.aiAnalysis && (
-            <span
-              className="meta-pill ai-insight"
-              onClick={(e) => {
-                e.stopPropagation();
-                setActiveTooltipId(activeTooltipId === task.id ? null : task.id);
-              }}
-              title="Click to view AI reasoning"
-            >
-              <Sparkles size={10} />
-              {task.aiAnalysis.source === 'ollama' ? 'Ollama AI' : 'NLP'}
-              {task.urgency === 'URGENT' ? ' · Urgent' : ''}
-            </span>
-          )}
-        </div>
-
-        {/* AI Insight Reason Popover */}
-        {activeTooltipId === task.id && task.aiAnalysis && (
-          <div
-            style={{
-              padding: '8px 10px',
-              backgroundColor: 'var(--bg-secondary)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-sm)',
-              fontSize: '0.75rem',
-              color: 'var(--text-secondary)',
-              lineHeight: 1.4
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 2 }}>
-              AI Analysis ({task.aiAnalysis.model}):
-            </div>
-            <div>{task.aiAnalysis.reasoning}</div>
-            <div style={{ marginTop: 4, fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-              Urgency: {task.aiAnalysis.urgencyScore}/10 · Importance: {task.aiAnalysis.importanceScore}/10
-            </div>
-          </div>
-        )}
-
-        <div className="matrix-card-footer">
-          <select
-            className="quadrant-select"
-            value={task.eisenhowerQuadrant || 'DO_FIRST'}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => onMoveQuadrant(task.id, e.target.value as EisenhowerQuadrant)}
-            title="Move to quadrant"
-          >
-            <option value="DO_FIRST">Q1: Do First</option>
-            <option value="SCHEDULE">Q2: Schedule</option>
-            <option value="DELEGATE">Q3: Delegate</option>
-            <option value="ELIMINATE">Q4: Eliminate</option>
-          </select>
-
-          <div className="matrix-card-actions">
-            <button
-              className="btn btn-ghost btn-icon"
-              title="Re-analyze with Ollama AI"
-              disabled={isBusy}
-              onClick={(e) => handleReanalyze(task.id, e)}
-            >
-              <RefreshCw size={12} className={isBusy ? 'spin' : ''} />
-            </button>
-            <button
-              className="btn btn-ghost btn-icon"
-              title="Edit Task"
-              onClick={(e) => {
-                e.stopPropagation();
-                onEditTask(task);
-              }}
-            >
-              <Edit3 size={12} />
-            </button>
-            <button
-              className="btn btn-ghost btn-icon"
-              title="Delete Task"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDeleteTask(task.id);
-              }}
-            >
-              <Trash2 size={12} />
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+  const cardProps = {
+    onDragStart: setDragId,
+    onDragEnd: () => {
+      setDragId(null);
+      setOverQ(null);
+    },
+    onToggleComplete,
+    onEdit: onEditTask,
+    onDelete: onDeleteTask,
+    onMove: move,
+    onReanalyze: reanalyze
   };
 
-  // Find active modal quadrant config and tasks
-  const activeQuadMeta = QUADRANTS.find((q) => q.key === modalQuadrant);
-  const activeModalTasks = modalQuadrant
-    ? getTasksForQuadrant(modalQuadrant).filter((t) => {
-        if (!modalSearch.trim()) return true;
-        const q = modalSearch.toLowerCase();
-        return t.title.toLowerCase().includes(q) || (t.description?.toLowerCase().includes(q) ?? false);
+  const renderCards = (list: Task[]) =>
+    list.map((t) => <MatrixCard key={t.id} task={t} busy={busyId === t.id} dragging={dragId === t.id} {...cardProps} />);
+
+  const focusMeta = focusQ ? QUADRANT_BY_KEY[focusQ] : null;
+  const focusList = focusQ
+    ? byQuadrant[focusQ].filter((t) => {
+        const s = focusSearch.trim().toLowerCase();
+        return !s || t.title.toLowerCase().includes(s) || (t.description ?? '').toLowerCase().includes(s);
       })
     : [];
 
+  const cycleMobile = (dir: 1 | -1) => {
+    const i = QUADRANTS.findIndex((q) => q.key === mobileQ);
+    setMobileQ(QUADRANTS[(i + dir + 4) % 4].key);
+  };
+
   return (
-    <div className="matrix-container">
-      {/* Header & Controls */}
-      <div className="matrix-header">
-        <div className="matrix-title-group">
-          <h1 className="matrix-title">Eisenhower Matrix</h1>
-          <span className="matrix-subtitle">
-            Click any matrix to open in a focused modal view
+    <div className="matrix view-enter">
+      <div className="matrix-toolbar">
+        <div className="matrix-toolbar-left">
+          <span className={`ai-pill ${aiStatus?.connected ? 'is-on' : ''}`} data-tip={aiStatus?.connected ? `Ollama at ${aiStatus.baseUrl}` : aiStatus?.error || 'Ollama unreachable — using offline NLP classification'}>
+            <span className={`status-dot ${aiStatus?.connected ? 'live' : 'warn'}`} />
+            <Sparkles />
+            <span>{aiStatus?.connected ? aiStatus.model : 'NLP fallback'}</span>
+          </span>
+          <span className="t-meta t-num hide-sm">
+            {totalOpen} open across 4 quadrants
           </span>
         </div>
-
-        <div className="matrix-toolbar">
-          {/* Ollama Model Status Badge */}
-          <div
-            className="ai-status-pill"
-            title={aiStatus?.connected ? `Connected to Ollama (${aiStatus.model})` : (aiStatus?.error || 'Ollama offline, fallback active')}
-          >
-            <span className={`ai-status-dot ${aiStatus?.connected ? '' : 'offline'}`} />
-            <span>
-              {aiStatus?.connected ? `Ollama: ${aiStatus.model}` : 'NLP Fallback'}
-            </span>
-          </div>
-
-          {/* Category Filter */}
-          {categories.length > 0 && (
-            <select
-              className="select"
-              style={{ fontSize: '0.8rem', padding: '4px 8px' }}
-              value={activeCategory}
-              onChange={(e) => setActiveCategory(e.target.value)}
+        <div className="matrix-toolbar-right">
+          {categories.length > 1 && (
+            <Menu
+              width={220}
+              trigger={(p) => (
+                <Button {...p} size="sm" variant={category === 'ALL' ? 'ghost' : 'soft'} icon={Hash} iconRight={ChevronDown}>
+                  {category === 'ALL' ? 'All categories' : category}
+                </Button>
+              )}
             >
-              <option value="ALL">All Categories</option>
-              {categories.map((cat) => (
-                <option key={cat} value={cat}>
-                  {cat}
-                </option>
-              ))}
-            </select>
+              {(close) => (
+                <>
+                  <MenuLabel>Category</MenuLabel>
+                  <MenuItem
+                    selected={category === 'ALL'}
+                    onSelect={() => {
+                      setCategory('ALL');
+                      close();
+                    }}
+                  >
+                    All categories
+                  </MenuItem>
+                  {categories.map((c) => (
+                    <MenuItem
+                      key={c}
+                      icon={Hash}
+                      selected={category === c}
+                      onSelect={() => {
+                        setCategory(c);
+                        close();
+                      }}
+                    >
+                      {c}
+                    </MenuItem>
+                  ))}
+                </>
+              )}
+            </Menu>
           )}
-
-          {/* Completed Toggle */}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={showCompleted}
-              onChange={(e) => setShowCompleted(e.target.checked)}
-            />
-            Completed
-          </label>
+          <Switch checked={showCompleted} onChange={setShowCompleted} label="Completed" />
         </div>
       </div>
 
-      {/* 2x2 Quadrant Grid */}
-      <div className="matrix-grid">
-        {QUADRANTS.map((quad) => {
-          const quadTasks = getTasksForQuadrant(quad.key);
+      {/* Mobile quadrant navigator: a miniature matrix */}
+      <div className="matrix-mini" role="tablist" aria-label="Quadrants">
+        {QUADRANTS.map((q) => {
+          const Icon = q.icon;
           return (
-            <div
-              key={quad.key}
-              className={`matrix-quadrant ${quad.accentClass}`}
-              onClick={(e) => {
-                // If user clicked inside a card or button, ignore
-                if ((e.target as HTMLElement).closest('.matrix-card, button, select, input')) return;
-                setModalQuadrant(quad.key);
-                setModalSearch('');
-              }}
-              title="Click to view this matrix in popup modal"
+            <button
+              key={q.key}
+              role="tab"
+              aria-selected={mobileQ === q.key}
+              className={`mini-q ${mobileQ === q.key ? 'is-active' : ''}`}
+              style={{ ['--q' as string]: q.color }}
+              onClick={() => setMobileQ(q.key)}
             >
-              <div
-                className="quadrant-header"
-                onClick={() => {
-                  setModalQuadrant(quad.key);
-                  setModalSearch('');
-                }}
-              >
-                <div className="quadrant-info">
-                  <div className="quadrant-title-row">
-                    <span className="quadrant-name">{quad.number}. {quad.name}</span>
-                    <span className="quadrant-badge">{quadTasks.length}</span>
-                  </div>
-                  <span className="quadrant-tagline">{quad.tagline}</span>
-                </div>
-                <div className="quadrant-header-actions" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    className="btn btn-ghost btn-icon"
-                    title={`Open ${quad.name} in popup modal`}
-                    onClick={() => {
-                      setModalQuadrant(quad.key);
-                      setModalSearch('');
-                    }}
-                  >
-                    <Maximize2 size={13} />
-                  </button>
-                  <button
-                    className="btn btn-ghost btn-icon"
-                    title={`Add task to ${quad.name}`}
-                    onClick={() => onQuickAdd(quad.key)}
-                  >
-                    <Plus size={14} />
-                  </button>
-                </div>
-              </div>
-
-              <div className="quadrant-content">
-                {quadTasks.length === 0 ? (
-                  <div
-                    className="quadrant-empty"
-                    onClick={() => {
-                      setModalQuadrant(quad.key);
-                      setModalSearch('');
-                    }}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <span>No {quad.name.toLowerCase()} tasks</span>
-                    <span style={{ fontSize: '0.72rem', opacity: 0.7 }}>Click to open matrix modal</span>
-                  </div>
-                ) : (
-                  quadTasks.map(renderTaskCard)
-                )}
-                <button
-                  className="quadrant-add-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onQuickAdd(quad.key);
-                  }}
-                >
-                  <Plus size={13} /> Add to {quad.name}
-                </button>
-              </div>
-            </div>
+              <Icon />
+              <span className="mini-q-name">{q.name}</span>
+              <span className="mini-q-count">{openCount(q.key)}</span>
+            </button>
           );
         })}
       </div>
 
-      {/* POPUP MODAL FOR CLICKED MATRIX */}
-      {modalQuadrant && activeQuadMeta && (
+      <div className="matrix-board" onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setOverQ(null)}>
+        <div className="axis axis-top" aria-hidden="true">
+          <span>Urgent</span>
+          <span>Not urgent</span>
+        </div>
+        <div className="axis axis-left" aria-hidden="true">
+          <span>Important</span>
+          <span>Not important</span>
+        </div>
+
         <div
-          className="modal-overlay"
-          onClick={() => setModalQuadrant(null)}
-          role="dialog"
-          aria-modal="true"
+          className="matrix-grid"
+          data-mobile={mobileQ}
+          onTouchStart={(e) => (touchX.current = e.touches[0].clientX)}
+          onTouchEnd={(e) => {
+            if (touchX.current === null) return;
+            const dx = e.changedTouches[0].clientX - touchX.current;
+            touchX.current = null;
+            if (Math.abs(dx) > 70 && window.innerWidth < 760) cycleMobile(dx < 0 ? 1 : -1);
+          }}
         >
-          <div
-            className="modal-content matrix-modal-window"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Modal Header */}
-            <div className="matrix-modal-header">
-              <div className="matrix-modal-header-left">
-                <div className="matrix-modal-title-row">
-                  <span className="matrix-modal-title">
-                    {activeQuadMeta.number}. {activeQuadMeta.name}
+          {QUADRANTS.map((q) => {
+            const list = byQuadrant[q.key];
+            const Icon = q.icon;
+            const isOver = overQ === q.key && dragId !== null;
+            const dragSourceQ = dragId ? quadrantOfTask(tasks.find((t) => t.id === dragId) ?? ({} as Task)) : null;
+            return (
+              <section
+                key={q.key}
+                className={`quadrant ${isOver && dragSourceQ !== q.key ? 'is-drop' : ''} ${dragId ? 'is-dragging' : ''}`}
+                data-q={q.key}
+                style={{ ['--q' as string]: q.color, ['--q-soft' as string]: q.soft }}
+                onDragOver={(e) => {
+                  if (!e.dataTransfer.types.includes(DRAG_MIME)) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  if (overQ !== q.key) setOverQ(q.key);
+                }}
+                onDrop={(e) => drop(e, q.key)}
+                aria-label={`${q.name}: ${q.tagline}`}
+              >
+                <header className="q-head">
+                  <span className="q-icon">
+                    <Icon />
                   </span>
-                  <span className="quadrant-badge">
-                    {getTasksForQuadrant(activeQuadMeta.key).length} Tasks
-                  </span>
+                  <div className="q-titles">
+                    <div className="q-name">
+                      {q.name}
+                      <span className="q-code">{q.code}</span>
+                    </div>
+                    <div className="q-tagline">{q.tagline}</div>
+                  </div>
+                  <span className="q-count t-num">{openCount(q.key)}</span>
+                  <div className="q-head-actions">
+                    <IconButton
+                      icon={Maximize2}
+                      label="Focus view"
+                      size="sm"
+                      onClick={() => {
+                        setFocusQ(q.key);
+                        setFocusSearch('');
+                      }}
+                    />
+                    <IconButton icon={Plus} label="Add with details" size="sm" onClick={() => onQuickAdd(q.key)} />
+                  </div>
+                </header>
+
+                <div className="q-body">
+                  {list.length === 0 ? (
+                    <div className="q-empty">
+                      <span className="q-empty-icon">
+                        <Icon />
+                      </span>
+                      <strong>{q.emptyTitle}</strong>
+                      <span>{q.description}</span>
+                    </div>
+                  ) : (
+                    renderCards(list)
+                  )}
+                  {isOver && dragSourceQ !== q.key && (
+                    <div className="q-drop-hint">
+                      <ArrowRightLeft /> Drop to move into {q.name}
+                    </div>
+                  )}
                 </div>
-                <p className="matrix-modal-subtitle">
-                  {activeQuadMeta.tagline}
-                </p>
-              </div>
 
-              <div className="matrix-modal-header-actions">
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={() => onQuickAdd(activeQuadMeta.key)}
-                >
-                  <Plus size={13} /> Add Task
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-icon"
-                  onClick={() => setModalQuadrant(null)}
-                  title="Close (Esc)"
-                >
-                  <X size={16} />
-                </button>
-              </div>
+                <footer className="q-foot">
+                  <InlineAdd quadrant={q} onCreate={onInlineCreateTask ? (title) => onInlineCreateTask(title, q.key) : undefined} onDetailed={() => onQuickAdd(q.key)} />
+                </footer>
+              </section>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Focus dialog for a single quadrant */}
+      <Dialog
+        open={!!focusQ}
+        onClose={() => setFocusQ(null)}
+        width={720}
+        icon={focusMeta?.icon}
+        iconTone={focusMeta?.color}
+        title={focusMeta ? `${focusMeta.name}` : ''}
+        subtitle={focusMeta ? `${focusMeta.code} · ${focusMeta.tagline} — ${focusMeta.verb.toLowerCase()}.` : ''}
+        className="focus-dialog"
+        bare
+      >
+        {focusMeta && (
+          <>
+            <div className="focus-controls">
+              <Segmented
+                size="sm"
+                value={focusMeta.key}
+                onChange={(k) => {
+                  setFocusQ(k);
+                  setFocusSearch('');
+                }}
+                items={QUADRANTS.map((q) => ({ value: q.key, label: q.name, count: openCount(q.key) }))}
+              />
+              <SearchField value={focusSearch} onChange={setFocusSearch} placeholder={`Filter ${focusMeta.name}`} className="focus-search" />
             </div>
-
-            {/* Quick Switcher Tabs between the 4 Matrices */}
-            <div className="matrix-modal-tabs">
-              {QUADRANTS.map((q) => {
-                const count = getTasksForQuadrant(q.key).length;
-                const isActive = modalQuadrant === q.key;
-                return (
-                  <button
-                    key={q.key}
-                    type="button"
-                    className={`matrix-tab-btn ${isActive ? 'active' : ''}`}
-                    onClick={() => {
-                      setModalQuadrant(q.key);
-                      setModalSearch('');
-                      setInlineTitle('');
-                    }}
-                  >
-                    <span>{q.number}. {q.name}</span>
-                    <span className="matrix-tab-count">{count}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Search Filter inside Modal */}
-            <div className="matrix-modal-search-row">
-              <div style={{ position: 'relative', width: '100%' }}>
-                <Search size={13} style={{ position: 'absolute', left: 10, top: 10, color: 'var(--text-muted)' }} />
-                <input
-                  type="text"
-                  className="input"
-                  placeholder={`Filter tasks in ${activeQuadMeta.name}...`}
-                  value={modalSearch}
-                  onChange={(e) => setModalSearch(e.target.value)}
-                  style={{ paddingLeft: 30, fontSize: '0.82rem', height: 32 }}
-                />
-              </div>
-            </div>
-
-            {/* Modal Body - Tasks List */}
-            <div className="matrix-modal-body">
-              {activeModalTasks.length === 0 ? (
-                <div className="quadrant-empty" style={{ padding: '40px 16px' }}>
-                  <p style={{ fontWeight: 500, color: 'var(--text-primary)', marginBottom: 4 }}>
-                    {modalSearch ? 'No matching tasks' : `No tasks in ${activeQuadMeta.name}`}
-                  </p>
-                  <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', maxWidth: 360, margin: '0 auto 16px' }}>
-                    {activeQuadMeta.description}
-                  </p>
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={() => onQuickAdd(activeQuadMeta.key)}
-                  >
-                    <Plus size={13} /> Add First Task
-                  </button>
+            <div className="focus-body" style={{ ['--q' as string]: focusMeta.color, ['--q-soft' as string]: focusMeta.soft }}>
+              {focusList.length === 0 ? (
+                <div className="q-empty">
+                  <span className="q-empty-icon">{focusSearch ? <SearchX /> : <focusMeta.icon />}</span>
+                  <strong>{focusSearch ? 'No matching tasks' : focusMeta.emptyTitle}</strong>
+                  <span>{focusSearch ? 'Try a different search.' : focusMeta.description}</span>
                 </div>
               ) : (
-                activeModalTasks.map(renderTaskCard)
+                renderCards(focusList)
               )}
             </div>
-
-            {/* Modal Footer - Inline Quick Capture */}
-            <div className="matrix-modal-footer">
-              <form onSubmit={handleInlineAddSubmit} style={{ display: 'flex', width: '100%', gap: 8 }}>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder={`Quick add task to ${activeQuadMeta.name}... (Press Enter)`}
-                  value={inlineTitle}
-                  onChange={(e) => setInlineTitle(e.target.value)}
-                  disabled={isInlineSaving}
-                  style={{ fontSize: '0.82rem', height: 34 }}
-                />
-                <button
-                  type="submit"
-                  className="btn btn-primary btn-sm"
-                  disabled={!inlineTitle.trim() || isInlineSaving}
-                >
-                  {isInlineSaving ? 'Adding...' : 'Add'}
-                </button>
-              </form>
+            <div className="dialog-footer" style={{ ['--q' as string]: focusMeta.color }}>
+              <div style={{ flex: 1 }}>
+                <InlineAdd key={focusMeta.key} quadrant={focusMeta} autoOpen onCreate={onInlineCreateTask ? (title) => onInlineCreateTask(title, focusMeta.key) : undefined} onDetailed={() => onQuickAdd(focusMeta.key)} />
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Dialog>
     </div>
   );
 };

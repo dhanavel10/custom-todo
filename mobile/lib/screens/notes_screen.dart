@@ -3,6 +3,9 @@ import 'package:intl/intl.dart';
 import '../models/note.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/markdown_view.dart';
+import '../widgets/ui.dart';
+import 'note_editor_page.dart';
 
 class NotesScreen extends StatefulWidget {
   const NotesScreen({super.key});
@@ -14,6 +17,7 @@ class NotesScreen extends StatefulWidget {
 class NotesScreenState extends State<NotesScreen> {
   List<Note> _notes = [];
   bool _isLoading = true;
+  bool _failed = false;
 
   @override
   void initState() {
@@ -22,210 +26,199 @@ class NotesScreenState extends State<NotesScreen> {
   }
 
   Future<void> refresh() async {
-    setState(() => _isLoading = true);
+    if (_notes.isEmpty) setState(() => _isLoading = true);
     try {
       final list = await ApiService().fetchNotes();
       if (mounted) {
         setState(() {
           _notes = list;
           _isLoading = false;
+          _failed = false;
         });
       }
     } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _failed = true;
+        });
+      }
     }
   }
 
-  void _showAddNoteDialog() {
-    final titleCtrl = TextEditingController();
-    final contentCtrl = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: const BorderSide(color: AppColors.border),
+  Future<void> _openEditor([Note? note]) async {
+    final changed = await Navigator.of(context).push<bool>(
+      PageRouteBuilder(
+        transitionDuration: Motion.slow,
+        reverseTransitionDuration: Motion.base,
+        pageBuilder: (_, _, _) => NoteEditorPage(note: note),
+        transitionsBuilder: (_, a, _, child) => FadeTransition(
+          opacity: CurvedAnimation(parent: a, curve: Curves.easeOut),
+          child: SlideTransition(position: Tween(begin: const Offset(0, 0.04), end: Offset.zero).animate(CurvedAnimation(parent: a, curve: Motion.out)), child: child),
         ),
-        title: const Text(
-          'Create Note',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.heading),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleCtrl,
-              style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
-              decoration: const InputDecoration(
-                hintText: 'Title (optional)',
-                hintStyle: TextStyle(fontSize: 13, color: AppColors.textMuted),
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: contentCtrl,
-              maxLines: 4,
-              style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
-              decoration: const InputDecoration(
-                hintText: 'Write your thoughts or scratchpad notes...',
-                hintStyle: TextStyle(fontSize: 13, color: AppColors.textMuted),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final content = contentCtrl.text.trim();
-              if (content.isNotEmpty) {
-                Navigator.pop(ctx);
-                await ApiService().createNote(
-                  title: titleCtrl.text.trim().isEmpty ? null : titleCtrl.text.trim(),
-                  content: content,
-                );
-                refresh();
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            child: const Text('Save Note', style: TextStyle(color: Colors.white, fontSize: 13)),
-          ),
-        ],
       ),
     );
+    if (changed == true) {
+      refresh();
+      if (mounted) showToast(context, note == null ? 'Note saved' : 'Note updated', icon: Icons.sticky_note_2_rounded, color: context.palette.amber);
+    }
   }
 
-  Future<void> _deleteNote(String id) async {
-    await ApiService().deleteNote(id);
+  Future<void> _deleteNote(Note note) async {
+    final ok = await showConfirm(context, title: 'Delete this note?', message: note.title?.isNotEmpty == true ? '“${note.title}” will be removed.' : 'This cannot be undone.', confirmLabel: 'Delete', danger: true);
+    if (!ok) return;
+    await ApiService().deleteNote(note.id);
+    if (mounted) showToast(context, 'Note deleted', icon: Icons.delete_outline_rounded, color: context.palette.text3);
     refresh();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // Notes Action Header
-        Container(
-          color: AppColors.surface,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          child: Row(
-            children: [
-              Text(
-                'Scratchpad & Notes (${_notes.length})',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.heading),
-              ),
-              const Spacer(),
-              ElevatedButton.icon(
-                onPressed: _showAddNoteDialog,
-                icon: const Icon(Icons.add, size: 14),
-                label: const Text('New Note', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const Divider(height: 1, color: AppColors.border),
+    final p = context.palette;
+    if (_isLoading) return const SkeletonList(rows: 4);
+    if (_failed && _notes.isEmpty) return Center(child: SingleChildScrollView(child: ErrorState(message: 'Check the server URL in Settings, then retry.', onRetry: refresh)));
 
-        // Notes List
-        Expanded(
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary))
-              : RefreshIndicator(
-                  onRefresh: refresh,
-                  color: AppColors.primary,
-                  child: _notes.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.description_outlined, size: 36, color: AppColors.textMuted.withValues(alpha: 0.4)),
-                              const SizedBox(height: 8),
-                              const Text('No notes yet', style: TextStyle(color: AppColors.textMuted, fontSize: 13)),
-                              const SizedBox(height: 12),
-                              OutlinedButton.icon(
-                                onPressed: _showAddNoteDialog,
-                                icon: const Icon(Icons.add, size: 14, color: AppColors.primary),
-                                label: const Text('Create First Note', style: TextStyle(color: AppColors.primary, fontSize: 12)),
-                                style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(color: AppColors.border),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      : ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(14, 12, 14, 80),
-                          itemCount: _notes.length,
-                          separatorBuilder: (_, _) => const SizedBox(height: 8),
-                          itemBuilder: (context, idx) {
-                            final note = _notes[idx];
-                            DateTime? dt;
-                            try {
-                              dt = DateTime.parse(note.createdAt);
-                            } catch (_) {}
-                            final dateText = dt != null ? DateFormat('MMM d, yyyy').format(dt) : '';
+    final pinned = _notes.where((n) => n.isPinned).toList();
+    final others = _notes.where((n) => !n.isPinned).toList();
 
-                            return Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: AppColors.surface,
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: AppColors.border),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      if (note.title != null && note.title!.isNotEmpty)
-                                        Expanded(
-                                          child: Text(
-                                            note.title!,
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 14,
-                                              color: AppColors.heading,
-                                            ),
-                                          ),
-                                        ),
-                                      const Spacer(),
-                                      Text(dateText, style: const TextStyle(fontSize: 10, color: AppColors.textMuted)),
-                                      const SizedBox(width: 4),
-                                      IconButton(
-                                        icon: const Icon(Icons.delete_outline, size: 16, color: AppColors.textMuted),
-                                        onPressed: () => _deleteNote(note.id),
-                                        padding: EdgeInsets.zero,
-                                        constraints: const BoxConstraints(),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    note.content,
-                                    style: const TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.4),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                ),
+    Widget grid(List<Note> notes, {bool withNew = false}) {
+      // Two balanced columns (simple masonry by estimated height)
+      final cols = [<Widget>[], <Widget>[]];
+      final heights = [0.0, 0.0];
+      final items = <Widget>[if (withNew) _NewNoteCard(onTap: () => _openEditor())];
+      final weights = <double>[if (withNew) 120];
+      for (final n in notes) {
+        items.add(_NoteCard(note: n, onTap: () => _openEditor(n), onDelete: () => _deleteNote(n)));
+        weights.add(90 + (stripMarkdown(n.content).length.clamp(0, 260)) * 0.45 + ((n.title?.isNotEmpty ?? false) ? 28 : 0));
+      }
+      for (var i = 0; i < items.length; i++) {
+        final c = heights[0] <= heights[1] ? 0 : 1;
+        cols[c].add(Padding(padding: const EdgeInsets.only(bottom: 10), child: items[i]));
+        heights[c] += weights[i];
+      }
+      return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(child: Column(children: cols[0])),
+        const SizedBox(width: 10),
+        Expanded(child: Column(children: cols[1])),
+      ]);
+    }
+
+    return RefreshIndicator(
+      onRefresh: refresh,
+      child: _notes.isEmpty
+          ? ListView(children: [
+              const SizedBox(height: 32),
+              EmptyState(
+                icon: Icons.history_edu_rounded,
+                tone: p.amber,
+                title: 'Your notebook is empty',
+                message: 'A quiet place for half-formed ideas, meeting notes and plans. Markdown welcome.',
+                action: FilledButton.icon(onPressed: () => _openEditor(), icon: const Icon(Icons.edit_rounded, size: 18), label: const Text('Write your first note')),
+              ),
+            ])
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 110),
+              children: [
+                Row(children: [
+                  Text('${_notes.length} ${_notes.length == 1 ? 'note' : 'notes'}', style: AppType.caption(p.text3)),
+                  const Spacer(),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(minimumSize: const Size(0, 40), padding: const EdgeInsets.symmetric(horizontal: 14)),
+                    onPressed: () => _openEditor(),
+                    icon: const Icon(Icons.add_rounded, size: 18),
+                    label: const Text('New note'),
+                  ),
+                ]),
+                if (pinned.isNotEmpty) ...[
+                  SectionLabel('Pinned', icon: Icons.push_pin_rounded, color: p.amber),
+                  grid(pinned),
+                  if (others.isNotEmpty) const SectionLabel('Everything else'),
+                ] else
+                  const SizedBox(height: 12),
+                grid(others),
+              ],
+            ),
+    );
+  }
+}
+
+class _NoteCard extends StatelessWidget {
+  final Note note;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+  const _NoteCard({required this.note, required this.onTap, required this.onDelete});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final preview = stripMarkdown(note.content);
+    final updated = parseDate(note.updatedAt);
+    final hasTitle = note.title != null && note.title!.trim().isNotEmpty;
+    final checks = RegExp(r'^\s*[-*+]\s+\[( |x|X)\]', multiLine: true).allMatches(note.content).length;
+    final done = RegExp(r'^\s*[-*+]\s+\[(x|X)\]', multiLine: true).allMatches(note.content).length;
+
+    return Pressable(
+      onTap: onTap,
+      onLongPress: onDelete,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+        decoration: BoxDecoration(
+          color: note.isPinned ? Color.alphaBlend(p.amber.withValues(alpha: p.isDark ? 0.08 : 0.05), p.surface) : p.surface,
+          borderRadius: BorderRadius.circular(Radii.lg),
+          border: Border.all(color: note.isPinned ? p.amber.withValues(alpha: 0.3) : p.border),
         ),
-      ],
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: Text(
+                hasTitle ? note.title! : 'Untitled',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: AppType.serif(hasTitle ? p.text : p.text3, size: 17, weight: FontWeight.w600).copyWith(height: 1.25, fontStyle: hasTitle ? null : FontStyle.italic),
+              ),
+            ),
+            if (note.isPinned) Padding(padding: const EdgeInsets.only(left: 4, top: 2), child: Icon(Icons.push_pin_rounded, size: 14, color: p.amber)),
+          ]),
+          if (preview.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(preview, maxLines: 7, overflow: TextOverflow.ellipsis, style: AppType.caption(p.text2).copyWith(fontSize: 13, height: 1.5)),
+          ],
+          if (checks > 0) ...[
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(3), child: LinearProgressIndicator(value: done / checks, minHeight: 4, color: p.green, backgroundColor: p.sunken))),
+              const SizedBox(width: 8),
+              Text('$done/$checks', style: AppType.mono(p.text3, size: 10)),
+            ]),
+          ],
+          const SizedBox(height: 10),
+          Text(updated != null ? DateFormat('MMM d').format(updated) : '', style: AppType.meta(p.text3)),
+        ]),
+      ),
+    );
+  }
+}
+
+class _NewNoteCard extends StatelessWidget {
+  final VoidCallback onTap;
+  const _NewNoteCard({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Pressable(
+      onTap: onTap,
+      child: Container(
+        height: 110,
+        width: double.infinity,
+        decoration: BoxDecoration(borderRadius: BorderRadius.circular(Radii.lg), border: Border.all(color: p.borderStrong)),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(Icons.add_rounded, color: p.primaryText),
+          const SizedBox(height: 4),
+          Text('New note', style: AppType.card(p.text2).copyWith(fontSize: 13)),
+        ]),
+      ),
     );
   }
 }
