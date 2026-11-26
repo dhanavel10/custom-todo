@@ -1,0 +1,66 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: todo-ingress
+  namespace: todo-app
+  labels:
+    app.kubernetes.io/name: todo-ingress
+    app.kubernetes.io/part-of: productivity-suite
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    # --- Network Security & Hardening ---
+    # 1. Payload & Buffer Protection (DDoS / Buffer Overflow mitigation)
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/client-body-buffer-size: "128k"
+
+    # 2. Rate Limiting (Brute-force & Denial-of-Service mitigation)
+    nginx.ingress.kubernetes.io/limit-rps: "30"
+    nginx.ingress.kubernetes.io/limit-connections: "15"
+
+    # 3. TLS / HTTPS Enforcement (Uncomment when domain cert is active)
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+
+    # 4. Security Headers & HSTS Injection
+    # nginx.ingress.kubernetes.io/configuration-snippet: |
+    #   more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload";
+    #   more_set_headers "X-Content-Type-Options: nosniff";
+    #   more_set_headers "X-Frame-Options: SAMEORIGIN";
+spec:
+  ingressClassName: nginx
+  # To enable TLS termination, uncomment below:
+  # tls:
+  #   - hosts:
+  #       - todo.dhanavel.online
+  #     secretName: todo-tls-cert
+  rules:
+    - host: todo.dhanavel.online
+      http:
+        paths:
+          # Backend API endpoints
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 3001
+          # Backend Health check endpoint
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 3001
+          # Frontend static assets and SPA routes
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80

@@ -1,0 +1,142 @@
+# ==============================================================================
+# NETWORK SECURITY POLICY: ZERO-TRUST DEFAULT-DENY ARCHITECTURE
+# Follows CIS Kubernetes Benchmark & NIST SP 800-190 standards
+# ==============================================================================
+
+# 1. BASELINE: Default-Deny ALL Ingress & Egress in the namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: todo-app
+  labels:
+    app.kubernetes.io/name: default-deny-all
+    app.kubernetes.io/part-of: productivity-suite
+spec:
+  podSelector: {} # Selects all pods in todo-app
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# 2. CORE DNS RESOLUTION: Allow pods to resolve cluster DNS (CoreDNS)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-coredns-egress
+  namespace: todo-app
+  labels:
+    app.kubernetes.io/name: allow-coredns-egress
+    app.kubernetes.io/part-of: productivity-suite
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: ["todo-frontend", "todo-backend"]
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# 3. FRONTEND NETWORK POLICY: Allow ingress on port 80, egress to backend-service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-traffic
+  namespace: todo-app
+  labels:
+    app.kubernetes.io/name: allow-frontend-traffic
+    app.kubernetes.io/part-of: productivity-suite
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: todo-frontend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 80
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: todo-backend
+      ports:
+        - protocol: TCP
+          port: 3001
+---
+# 4. BACKEND NETWORK POLICY:
+# - Ingress: Allowed on port 3001
+# - Egress: Allowed to PostgreSQL on port 5432 & CoreDNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-traffic
+  namespace: todo-app
+  labels:
+    app.kubernetes.io/name: allow-backend-traffic
+    app.kubernetes.io/part-of: productivity-suite
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: todo-backend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 3001
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32  # Block Cloud Provider Metadata Endpoint (SSRF defense)
+      ports:
+        - protocol: TCP
+          port: 11434
+---
+# 5. POSTGRES NETWORK POLICY: Strict isolation (Zero Trust)
+# - Ingress: Allowed ONLY from backend pod on port 5432
+# - Egress: Denied completely
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-ingress
+  namespace: todo-app
+  labels:
+    app.kubernetes.io/name: allow-postgres-ingress
+    app.kubernetes.io/part-of: productivity-suite
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: todo-backend
+      ports:
+        - protocol: TCP
+          port: 5432

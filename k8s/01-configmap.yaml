@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: todo-config
+  namespace: todo-app
+  labels:
+    app.kubernetes.io/name: todo-app
+    app.kubernetes.io/part-of: productivity-suite
+data:
+  NODE_ENV: "production"
+  PORT: "3001"
+  HOST: "0.0.0.0"
+  DATA_DIR: "/app/data"
+  POSTGRES_DB: "todo_db"
+  POSTGRES_USER: "todo_user"
+  POSTGRES_HOST: "postgres-service"
+  POSTGRES_PORT: "5432"
+  # Ollama service endpoint (point to internal service or external host)
+  OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+  OLLAMA_MODEL: "nemotron-3-nano:30b"

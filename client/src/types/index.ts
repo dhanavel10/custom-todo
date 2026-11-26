@@ -111,6 +111,7 @@ export interface Note {
   captureId: string | null;
   title: string | null;
   content: string;
+  topic?: string | null;
   isPinned: boolean;
   isArchived: boolean;
   createdAt: string;

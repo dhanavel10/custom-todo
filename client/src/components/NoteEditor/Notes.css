@@ -2,6 +2,16 @@
    Idea Pad — notebook grid + distraction-free editor
    ========================================================================== */
 
+.notes-topic-bar { margin-bottom: 18px; }
+.note-groups { display: flex; flex-direction: column; gap: 24px; }
+.note-group-head {
+  width: 100%; background: none; border: none; padding: 2px 0; cursor: pointer;
+  text-align: left; color: inherit;
+}
+.note-group-head:hover .note-group-chevron { color: var(--text); }
+.note-group-chevron { display: inline-flex; align-items: center; color: var(--text-3); transition: color var(--dur-fast); }
+.note-card-topic-row { display: flex; align-items: center; margin-bottom: 8px; padding-right: 22px; }
+
 .notes-grid { columns: 280px; column-gap: 14px; }
 .note-card {
   position: relative; break-inside: avoid; margin-bottom: 14px; width: 100%;
@@ -60,6 +70,44 @@
 .note-title-input::placeholder { color: var(--text-3); opacity: 0.6; }
 .note-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 10px 0 18px; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .note-meta .tag svg { fill: currentColor; }
+.note-meta .note-topic-btn svg { fill: none; }
+.note-topic-wrap { position: relative; display: inline-flex; }
+.note-topic-btn { border: none; cursor: pointer; transition: filter var(--dur-fast); }
+.note-topic-btn:hover { filter: brightness(0.95); }
+.note-topic-auto { opacity: 0.7; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; margin-left: 2px; }
+.note-topic-popover {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: 230px;
+  padding: 8px; border-radius: var(--r-md);
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-lg);
+}
+.note-topic-popover-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2px 4px 6px; font-size: 11px; font-weight: 650; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em;
+}
+.note-topic-reset {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: none; background: var(--surface-sunken); color: var(--text-2); border-radius: var(--r-sm);
+  padding: 2px 6px; font-size: 11px; cursor: pointer;
+}
+.note-topic-reset:hover { color: var(--text); }
+.note-topic-options { display: flex; flex-direction: column; gap: 2px; }
+.note-topic-option {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 8px; border: none; border-radius: var(--r-sm); background: transparent;
+  color: var(--text-2); font-size: 12.5px; text-align: left; cursor: pointer;
+}
+.note-topic-option:hover { background: var(--surface-sunken); color: var(--text); }
+.note-topic-option.is-active { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+.note-topic-check { margin-left: auto; }
+.note-topic-custom { display: flex; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle); }
+.note-topic-custom input {
+  flex: 1; min-width: 0; height: 28px; padding: 0 8px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text);
+}
+.note-topic-apply {
+  height: 28px; padding: 0 8px; border: none; border-radius: var(--r-sm);
+  background: var(--primary); color: #fff; font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
 
 .md-toolbar {
   position: sticky; top: 0; z-index: 2;

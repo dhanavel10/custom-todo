@@ -9,7 +9,7 @@ router.use(authenticate);
 // GET /api/v1/notes
 router.get('/', async (req, res, next) => {
   try {
-    const { q, pinned, archived } = req.query;
+    const { q, pinned, archived, topic } = req.query;
     let query = 'SELECT * FROM notes WHERE user_id = ?';
     const params = [req.user.id];
 
@@ -23,9 +23,14 @@ router.get('/', async (req, res, next) => {
       query += ' AND is_pinned = 1';
     }
 
+    if (topic && topic.trim()) {
+      query += ' AND topic = ?';
+      params.push(topic.trim());
+    }
+
     if (q && q.trim()) {
-      query += ' AND (title LIKE ? OR content LIKE ?)';
-      params.push(`%${q.trim()}%`, `%${q.trim()}%`);
+      query += ' AND (title LIKE ? OR content LIKE ? OR topic LIKE ?)';
+      params.push(`%${q.trim()}%`, `%${q.trim()}%`, `%${q.trim()}%`);
     }
 
     query += ' ORDER BY is_pinned DESC, updated_at DESC';
@@ -40,14 +45,15 @@ router.get('/', async (req, res, next) => {
 // POST /api/v1/notes - Create an empty or populated note
 router.post('/', async (req, res, next) => {
   try {
-    const { title = '', content = '', isPinned = false } = req.body;
+    const { title = '', content = '', topic = null, isPinned = false } = req.body;
+    const normalizedTopic = topic && String(topic).trim() ? String(topic).trim() : null;
     const noteId = randomUUID();
     const now = new Date().toISOString();
 
     await db.prepare(`
-      INSERT INTO notes (id, user_id, title, content, is_pinned, is_archived, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 0, ?, ?)
-    `).run(noteId, req.user.id, title || null, content, isPinned ? 1 : 0, now, now);
+      INSERT INTO notes (id, user_id, title, content, topic, is_pinned, is_archived, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(noteId, req.user.id, title || null, content, normalizedTopic, isPinned ? 1 : 0, now, now);
 
     const note = await db.prepare('SELECT * FROM notes WHERE id = ?').get(noteId);
     res.status(201).json(formatNote(note));
@@ -77,13 +83,15 @@ router.patch('/:id', async (req, res, next) => {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Note not found' } });
     }
 
-    const { title, content, isPinned, isArchived } = req.body;
+    const { title, content, topic, isPinned, isArchived } = req.body;
     const now = new Date().toISOString();
+    const nextTopic = topic === undefined ? existing.topic : (topic && String(topic).trim() ? String(topic).trim() : null);
 
     await db.prepare(`
       UPDATE notes
       SET title = COALESCE(?, title),
           content = COALESCE(?, content),
+          topic = ?,
           is_pinned = COALESCE(?, is_pinned),
           is_archived = COALESCE(?, is_archived),
           updated_at = ?
@@ -91,6 +99,7 @@ router.patch('/:id', async (req, res, next) => {
     `).run(
       title !== undefined ? title : null,
       content !== undefined ? content : null,
+      nextTopic,
       isPinned !== undefined ? (isPinned ? 1 : 0) : null,
       isArchived !== undefined ? (isArchived ? 1 : 0) : null,
       now,
@@ -207,6 +216,7 @@ function formatNote(n) {
     captureId: n.capture_id,
     title: n.title,
     content: n.content,
+    topic: n.topic || null,
     isPinned: Boolean(n.is_pinned),
     isArchived: Boolean(n.is_archived),
     createdAt: n.created_at,

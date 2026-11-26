@@ -7,9 +7,16 @@ import pg from 'pg';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const dataDir = path.resolve(__dirname, '../../data');
+const defaultDataDir = fs.existsSync(path.resolve(__dirname, '../../data'))
+  ? path.resolve(__dirname, '../../data')
+  : path.resolve(__dirname, '../data');
+const dataDir = process.env.DATA_DIR || defaultDataDir;
 if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+  } catch (err) {
+    console.warn(`[DB] Could not create data directory at ${dataDir}: ${err.message}`);
+  }
 }
 
 const dbPath = path.join(dataDir, 'productivity.db');
@@ -106,6 +113,7 @@ export function initSqliteSchema() {
       capture_id TEXT REFERENCES captures(id) ON DELETE SET NULL,
       title TEXT,
       content TEXT DEFAULT '',
+      topic TEXT,
       is_pinned INTEGER DEFAULT 0,
       is_archived INTEGER DEFAULT 0,
       created_at TEXT NOT NULL,
@@ -175,6 +183,9 @@ export function initSqliteSchema() {
     if (!userCols.has('username')) dbInst.exec('ALTER TABLE users ADD COLUMN username TEXT UNIQUE;');
     if (!userCols.has('google_id')) dbInst.exec('ALTER TABLE users ADD COLUMN google_id TEXT UNIQUE;');
     if (!userCols.has('avatar_url')) dbInst.exec('ALTER TABLE users ADD COLUMN avatar_url TEXT;');
+
+    const noteCols = new Set(dbInst.prepare("PRAGMA table_info(notes)").all().map((c) => c.name));
+    if (!noteCols.has('topic')) dbInst.exec('ALTER TABLE notes ADD COLUMN topic TEXT;');
   } catch (err) {
     // Column already exists or error
   }
@@ -253,6 +264,7 @@ export async function initPgSchema() {
       capture_id TEXT REFERENCES captures(id) ON DELETE SET NULL,
       title TEXT,
       content TEXT DEFAULT '',
+      topic TEXT,
       is_pinned INTEGER DEFAULT 0,
       is_archived INTEGER DEFAULT 0,
       created_at TEXT NOT NULL,
@@ -315,6 +327,8 @@ export async function initPgSchema() {
     CREATE INDEX IF NOT EXISTS idx_notes_user_created ON notes(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_reminders_status_remind ON reminders(status, remind_at);
     CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read_at);
+
+    ALTER TABLE notes ADD COLUMN IF NOT EXISTS topic TEXT;
   `);
 }
 

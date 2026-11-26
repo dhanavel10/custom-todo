@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pin, Archive, ArchiveRestore, Trash2, ArrowLeft, ListTodo, Bold, Italic, Heading2, List, ListChecks, Code, Quote, Link2, Eye, PenLine, Check, CloudOff, type LucideIcon } from 'lucide-react';
+import { Pin, Archive, ArchiveRestore, Trash2, ArrowLeft, ListTodo, Bold, Italic, Heading2, List, ListChecks, Code, Quote, Link2, Eye, PenLine, Check, CloudOff, Sparkles, X, type LucideIcon } from 'lucide-react';
 import { api } from '../../lib/api';
 import { formatRelativeDate } from '../../lib/date';
 import { renderMarkdown } from '../../lib/markdown';
+import { getTopicMeta, resolveNoteTopic, SUPER_TOPICS } from '../../lib/noteTopics';
 import type { Note, Task } from '../../types';
 import { Button, IconButton, Segmented, Spinner, useToast } from '../ui';
 import './Notes.css';
@@ -44,6 +45,9 @@ export const NoteEditor = ({ note, onUpdateNote, onDeleteNote, onConvertToTask, 
   const [mode, setMode] = useState<'write' | 'preview'>('write');
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
+  const [topicOpen, setTopicOpen] = useState(false);
+  const [customTopic, setCustomTopic] = useState('');
+  const topicPickerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latest = useRef({ title: '', content: '' });
   const areaRef = useRef<HTMLTextAreaElement>(null);
@@ -158,10 +162,42 @@ export const NoteEditor = ({ note, onUpdateNote, onDeleteNote, onConvertToTask, 
     }
   };
 
+  useEffect(() => {
+    if (!topicOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (topicPickerRef.current && !topicPickerRef.current.contains(e.target as Node)) {
+        setTopicOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setTopicOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [topicOpen]);
+
   if (!note) return null;
 
   const words = content.trim() ? content.trim().split(/\s+/).length : 0;
   const readMin = Math.max(1, Math.round(words / 220));
+  const resolvedTopic = resolveNoteTopic({ ...note, title, content });
+  const topicMeta = getTopicMeta(resolvedTopic.topic);
+  const TopicIcon = topicMeta.icon;
+
+  const setNoteTopic = async (nextTopic: string | null) => {
+    setTopicOpen(false);
+    setCustomTopic('');
+    try {
+      const updated = await api.notes.update(note.id, { topic: nextTopic });
+      onUpdateNote(updated);
+    } catch {
+      toast({ kind: 'error', title: 'Could not update super topic' });
+    }
+  };
 
   const togglePin = async () => {
     try {
@@ -262,6 +298,73 @@ export const NoteEditor = ({ note, onUpdateNote, onDeleteNote, onConvertToTask, 
             <span>{readMin} min read</span>
             <span>·</span>
             <span>Created {new Date(note.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+            <div className="note-topic-wrap" ref={topicPickerRef}>
+              <button
+                type="button"
+                className={`tag tag-sm tag-${topicMeta.tone} note-topic-btn`}
+                onClick={() => setTopicOpen((o) => !o)}
+                title={resolvedTopic.isAuto ? 'Auto-grouped super topic (click to change)' : 'Super topic (click to change)'}
+              >
+                <TopicIcon />
+                <span>{resolvedTopic.topic}</span>
+                {resolvedTopic.isAuto && <span className="note-topic-auto">Auto</span>}
+              </button>
+              {topicOpen && (
+                <div className="note-topic-popover" role="dialog" aria-label="Choose super topic">
+                  <div className="note-topic-popover-head">
+                    <span>Super topic</span>
+                    {note.topic && (
+                      <button type="button" className="note-topic-reset" onClick={() => void setNoteTopic(null)}>
+                        <Sparkles size={11} />
+                        <span>Auto</span>
+                      </button>
+                    )}
+                  </div>
+                  <div className="note-topic-options">
+                    {SUPER_TOPICS.map((t) => {
+                      const Icon = t.icon;
+                      const active = !resolvedTopic.isAuto && resolvedTopic.topic === t.name;
+                      return (
+                        <button
+                          key={t.name}
+                          type="button"
+                          className={`note-topic-option ${active ? 'is-active' : ''}`}
+                          onClick={() => void setNoteTopic(t.name)}
+                        >
+                          <Icon size={13} />
+                          <span>{t.name}</span>
+                          {active && <Check size={13} className="note-topic-check" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <form
+                    className="note-topic-custom"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (customTopic.trim()) void setNoteTopic(customTopic.trim());
+                    }}
+                  >
+                    <input
+                      type="text"
+                      placeholder="Custom topic…"
+                      value={customTopic}
+                      onChange={(e) => setCustomTopic(e.target.value)}
+                      aria-label="Custom super topic"
+                    />
+                    {customTopic.trim() ? (
+                      <button type="submit" className="note-topic-apply">
+                        Set
+                      </button>
+                    ) : (
+                      <button type="button" className="note-topic-apply" onClick={() => setTopicOpen(false)} aria-label="Close">
+                        <X size={13} />
+                      </button>
+                    )}
+                  </form>
+                </div>
+              )}
+            </div>
             {note.isPinned && (
               <span className="tag tag-primary tag-sm">
                 <Pin />
